@@ -14,10 +14,17 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 1. **Set your control code.** In `index.html`, change the value of `ADMIN_CODE` to a secret string
    known only to you. This is checked on the visitor's device, so it is not meant for high security,
    but it stops friends from hijacking the playlist.
-2. Commit your changes and push to the `main` branch. GitHub Pages will serve `index.html`
-   automatically.
-3. Share the link to the page. Anyone with the control code can set a new video by pasting a YouTube
-   link or ID in the DJ control form.
+2. **Commit to `main`.** Make sure your default branch is named `main` (rename it in the repository
+   settings if necessary) and commit/push the files in this repository there. GitHub Pages will look
+   for the site files on the default branch by default.
+3. **Enable GitHub Pages.** In your repository on GitHub go to **Settings → Pages**, choose
+   **Build and deployment → Deploy from a branch**, and select the `main` branch with `/ (root)` as
+   the folder. Click **Save**; GitHub will begin building the page.
+4. **Wait for the deployment.** After a minute or two, a green "Your site is live" banner should
+   appear on the Pages settings screen. The site will be served at
+   `https://fillylumi.github.io/PlugDjButBad`.
+5. **Share the link.** Anyone with the control code can set a new video by pasting a YouTube link or
+   ID in the DJ control form.
 
 ## Limitations
 
