@@ -6,6 +6,7 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 ## Features
 
 - Embedded YouTube player powered by the [YouTube IFrame Player API](https://developers.google.com/youtube/iframe_api_reference)
+  with the native controls hidden so only the custom play/pause and mute buttons are exposed
 - Live "now playing" pushes to everyone currently connected using [ntfy](https://ntfy.sh)
 - A lightweight client-side control code gate to stop casual hijacking
 
@@ -37,5 +38,7 @@ A very small single-room watch party site designed for GitHub Pages deployment a
   it if someone finds it.
 - The push only reaches browsers that are currently open and connected to the topic. Latecomers will
   not catch up until you send another update.
+- Viewers can only use the custom play/pause and mute buttons—scrubbing and the native YouTube
+  controls are completely disabled.
 
 Feel free to customize the styling, add chat integrations, or expand the control features as needed!
