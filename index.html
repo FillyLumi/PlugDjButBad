@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plug.DJ But Bad</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background: radial-gradient(circle at top, #2a1f4d, #0b0b17 55%);
+        color: #f0f3ff;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header,
+      main,
+      footer {
+        width: min(960px, 92vw);
+        margin: 0 auto;
+      }
+
+      header {
+        padding: 3rem 0 2rem;
+        text-align: center;
+      }
+
+      h1 {
+        font-size: clamp(2.5rem, 6vw, 3.75rem);
+        margin: 0;
+      }
+
+      header p {
+        margin-top: 0.75rem;
+        font-size: 1.1rem;
+        color: #c2c8ff;
+      }
+
+      main {
+        flex: 1 1 auto;
+        display: grid;
+        gap: 1.5rem;
+      }
+
+      .player-wrapper {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        border-radius: 1rem;
+        overflow: hidden;
+        box-shadow: 0 12px 50px rgba(17, 0, 32, 0.55);
+        background: #090817;
+      }
+
+      #player {
+        width: 100%;
+        height: 100%;
+      }
+
+      .panel {
+        padding: 1.5rem;
+        background: rgba(16, 10, 38, 0.75);
+        border: 1px solid rgba(131, 115, 255, 0.2);
+        border-radius: 1rem;
+        backdrop-filter: blur(12px);
+      }
+
+      .panel h2 {
+        margin: 0 0 0.75rem;
+        font-size: 1.4rem;
+      }
+
+      form {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      label {
+        display: grid;
+        gap: 0.4rem;
+        font-weight: 600;
+        color: #d5d9ff;
+      }
+
+      input[type="text"],
+      input[type="password"] {
+        padding: 0.7rem 0.85rem;
+        border-radius: 0.6rem;
+        border: 1px solid rgba(189, 176, 255, 0.35);
+        background: rgba(9, 6, 21, 0.85);
+        color: inherit;
+        font-size: 1rem;
+      }
+
+      button {
+        justify-self: flex-start;
+        padding: 0.7rem 1.4rem;
+        border-radius: 0.6rem;
+        border: none;
+        background: linear-gradient(120deg, #6954ff, #f94eff);
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 30px rgba(249, 78, 255, 0.4);
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+
+      .status {
+        font-size: 0.95rem;
+        min-height: 1.4rem;
+      }
+
+      footer {
+        padding: 2rem 0 3rem;
+        text-align: center;
+        font-size: 0.9rem;
+        color: #9496be;
+      }
+
+      a {
+        color: #9ab5ff;
+      }
+
+      @media (max-width: 720px) {
+        header {
+          padding: 2.5rem 0 1.5rem;
+        }
+
+        .panel {
+          padding: 1.1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Plug.DJ But Bad</h1>
+      <p>Personal watch party room with a single DJ (you!). Share the page, keep the control code secret.</p>
+    </header>
+
+    <main>
+      <section class="player-wrapper">
+        <div id="player"></div>
+      </section>
+
+      <section class="panel">
+        <h2>DJ Control Booth</h2>
+        <p style="margin-top: 0; color: #aeb4ff; font-size: 0.95rem;">
+          Set the YouTube video that everyone sees. Only people with the control code can change it.
+        </p>
+        <form id="control-form">
+          <label>
+            Control code
+            <input
+              type="password"
+              id="control-code"
+              name="controlCode"
+              autocomplete="current-password"
+              required
+              placeholder="Enter your secret code"
+            />
+          </label>
+          <label>
+            YouTube video ID or link
+            <input
+              type="text"
+              id="video-input"
+              name="video"
+              required
+              placeholder="e.g. https://youtu.be/dQw4w9WgXcQ"
+            />
+          </label>
+          <button type="submit">Load video</button>
+          <p class="status" id="status"></p>
+        </form>
+        <p style="margin: 0; font-size: 0.9rem; color: #8486b2;">
+          Tip: the control code is only checked in the browser. It's great for keeping friends from
+          messing with your queue, but it isn't bulletproof security.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Built with the <a href="https://developers.google.com/youtube/iframe_api_reference" target="_blank" rel="noreferrer noopener">YouTube IFrame Player API</a>.
+      </p>
+    </footer>
+
+    <script>
+      const ADMIN_CODE = "changeme";
+      const STORAGE_KEY = "plugdjbutbad.currentVideo";
+      const DEFAULT_VIDEO = "5qap5aO4i9A"; // lofi hip hop radio
+
+      const form = document.getElementById("control-form");
+      const status = document.getElementById("status");
+      const videoInput = document.getElementById("video-input");
+
+      let player;
+      let playerReadyResolve;
+      const playerReady = new Promise((resolve) => (playerReadyResolve = resolve));
+
+      function parseVideoId(input) {
+        if (!input) return null;
+        const trimmed = input.trim();
+        if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+          return trimmed;
+        }
+        const match = trimmed.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
+        return match ? match[1] : null;
+      }
+
+      function loadVideo(videoId) {
+        if (!player) return;
+        player.loadVideoById(videoId);
+      }
+
+      function setStatus(message, success = false) {
+        status.textContent = message;
+        status.style.color = success ? "#8ef6b4" : "#ff89a7";
+      }
+
+      function hydrateForm(videoId) {
+        if (!videoId) return;
+        videoInput.value = `https://youtu.be/${videoId}`;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const code = /** @type {HTMLInputElement} */ (document.getElementById("control-code")).value;
+        const rawVideo = videoInput.value;
+        const videoId = parseVideoId(rawVideo);
+
+        if (code !== ADMIN_CODE) {
+          setStatus("That control code isn't right.");
+          return;
+        }
+
+        if (!videoId) {
+          setStatus("Please enter a valid YouTube video link or ID.");
+          return;
+        }
+
+        await playerReady;
+        loadVideo(videoId);
+        try {
+          localStorage.setItem(STORAGE_KEY, videoId);
+        } catch (error) {
+          console.warn("Unable to store video selection", error);
+        }
+        setStatus("Video updated for everyone!", true);
+        form.reset();
+      });
+
+      window.onYouTubeIframeAPIReady = function () {
+        const initialVideo = parseVideoId(localStorage.getItem(STORAGE_KEY)) || DEFAULT_VIDEO;
+        hydrateForm(initialVideo);
+        player = new YT.Player("player", {
+          videoId: initialVideo,
+          playerVars: {
+            autoplay: 1,
+            controls: 1,
+            modestbranding: 1,
+            rel: 0,
+            iv_load_policy: 3,
+          },
+          events: {
+            onReady: () => {
+              playerReadyResolve();
+            },
+          },
+        });
+      };
+
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      script.async = true;
+      document.head.appendChild(script);
+    </script>
+  </body>
+</html>
