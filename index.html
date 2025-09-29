@@ -121,10 +121,12 @@
         border: 1px solid rgba(131, 115, 255, 0.2);
         border-radius: 1rem;
         backdrop-filter: blur(12px);
+        display: grid;
+        gap: 1.25rem;
       }
 
       .panel h2 {
-        margin: 0 0 0.75rem;
+        margin: 0;
         font-size: 1.4rem;
       }
 
@@ -173,9 +175,118 @@
         box-shadow: none;
       }
 
+      .secondary-button {
+        background: rgba(22, 16, 48, 0.85);
+        border: 1px solid rgba(175, 157, 255, 0.35);
+        color: #f0f3ff;
+      }
+
+      .secondary-button:hover {
+        box-shadow: 0 8px 30px rgba(105, 84, 255, 0.25);
+      }
+
+      .form-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+
       .status {
         font-size: 0.95rem;
         min-height: 1.4rem;
+      }
+
+      .now-playing {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        align-items: baseline;
+        font-size: 0.95rem;
+        color: #c7ccff;
+      }
+
+      .now-playing strong {
+        color: #f0f3ff;
+      }
+
+      .queue-section {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .queue-section h3 {
+        margin: 0;
+        font-size: 1.15rem;
+      }
+
+      .queue-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .queue-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.9rem;
+        padding: 0.7rem 0.9rem;
+        border-radius: 0.75rem;
+        background: rgba(12, 7, 28, 0.9);
+        border: 1px solid rgba(175, 157, 255, 0.25);
+      }
+
+      .queue-item-info {
+        display: grid;
+        gap: 0.25rem;
+      }
+
+      .queue-item-title {
+        font-weight: 600;
+      }
+
+      .queue-item-meta {
+        font-size: 0.85rem;
+        color: #9aa0d8;
+        word-break: break-word;
+      }
+
+      .queue-actions {
+        display: flex;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+      }
+
+      .queue-actions button {
+        background: rgba(23, 19, 45, 0.85);
+        border: 1px solid rgba(175, 157, 255, 0.35);
+        color: #d6d9ff;
+        padding: 0.35rem 0.7rem;
+        border-radius: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+
+      .queue-actions button:hover {
+        box-shadow: 0 4px 18px rgba(105, 84, 255, 0.3);
+        transform: none;
+      }
+
+      .queue-actions button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+
+      .queue-actions button[data-locked="true"] {
+        opacity: 0.6;
+      }
+
+      #skip-button[data-locked="true"] {
+        opacity: 0.65;
       }
 
       footer {
@@ -228,6 +339,10 @@
           Late arrivals won't catch up automatically, but anyone connected when you send an update
           will jump to the new video immediately.
         </p>
+        <div class="now-playing">
+          <strong>Now playing:</strong>
+          <span id="now-playing-label">Loading…</span>
+        </div>
         <form id="control-form">
           <label>
             Control code
@@ -250,9 +365,19 @@
               placeholder="e.g. https://youtu.be/dQw4w9WgXcQ"
             />
           </label>
-          <button type="submit">Push to room</button>
+          <div class="form-actions">
+            <button type="submit">Add to queue</button>
+            <button type="button" id="skip-button" class="secondary-button">Skip current song</button>
+          </div>
           <p class="status" id="status"></p>
         </form>
+        <div class="queue-section">
+          <h3>Upcoming queue</h3>
+          <p id="queue-empty" style="margin: 0; color: #8486b2; font-size: 0.9rem;">
+            Queue is empty. Add something above!
+          </p>
+          <ol id="queue-list" class="queue-list" aria-live="polite"></ol>
+        </div>
         <p style="margin: 0; font-size: 0.9rem; color: #8486b2;">
           Tip: pick a long, random control topic and keep it private so strangers can't listen in on
           the broadcast channel.
@@ -277,22 +402,31 @@
       const NTFY_TOPIC = "plugdjbutbad-demo";
       const NTFY_BASE = "https://ntfy.sh";
       const STORAGE_KEY = "plugdjbutbad.currentVideo";
+      const QUEUE_STORAGE_KEY = "plugdjbutbad.queue";
+      const VOLUME_STORAGE_KEY = "plugdjbutbad.volume";
       const DEFAULT_VIDEO = "5qap5aO4i9A"; // lofi hip hop radio
+      const CLIENT_ID = window.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
       const form = document.getElementById("control-form");
       const status = document.getElementById("status");
       const videoInput = document.getElementById("video-input");
+      const controlCodeInput = document.getElementById("control-code");
+      const skipButton = document.getElementById("skip-button");
+      const queueList = document.getElementById("queue-list");
+      const queueEmptyState = document.getElementById("queue-empty");
+      const nowPlayingLabel = document.getElementById("now-playing-label");
       const volumeSlider = document.getElementById("volume-slider");
-      const VOLUME_STORAGE_KEY = "plugdjbutbad.volume";
 
       let player;
       let playerReadyResolve;
       const playerReady = new Promise((resolve) => (playerReadyResolve = resolve));
-      let currentVideoId = null;
+      let hasModeratorAccess = false;
+
+      const metadataCache = new Map();
 
       function parseVideoId(input) {
         if (!input) return null;
-        const trimmed = input.trim();
+        const trimmed = String(input).trim();
         if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
           return trimmed;
         }
@@ -300,29 +434,39 @@
         return match ? match[1] : null;
       }
 
-      function loadVideo(videoId) {
-        if (!player || !videoId) return;
-        player.loadVideoById(videoId);
+      function loadStoredQueue() {
+        try {
+          const raw = localStorage.getItem(QUEUE_STORAGE_KEY);
+          if (!raw) return [];
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return [];
+          return parsed
+            .map((entry) => parseVideoId(typeof entry === "string" ? entry : String(entry || "")))
+            .filter(Boolean);
+        } catch (error) {
+          console.warn("Unable to restore queue from storage", error);
+          return [];
+        }
       }
 
-      function hydrateForm(videoId) {
-        if (!videoId) return;
-        videoInput.value = `https://youtu.be/${videoId}`;
-      }
+      let queue = loadStoredQueue();
+      let currentVideoId = parseVideoId(localStorage.getItem(STORAGE_KEY)) || null;
 
       function setStatus(message, success = false) {
+        if (!status) return;
         status.textContent = message;
         status.style.color = success ? "#8ef6b4" : "#ff89a7";
       }
 
-      async function publishUpdate(videoId) {
+      async function sendCommand(payload) {
+        const enriched = { ...payload, clientId: CLIENT_ID, timestamp: Date.now() };
         const response = await fetch(`${NTFY_BASE}/${encodeURIComponent(NTFY_TOPIC)}`, {
           method: "POST",
           headers: {
             "Content-Type": "text/plain",
             "X-Title": "Plug.DJ But Bad update",
           },
-          body: videoId,
+          body: JSON.stringify(enriched),
         });
 
         if (!response.ok) {
@@ -330,19 +474,268 @@
         }
       }
 
-      function handleIncomingVideo(videoId) {
-        if (!videoId || videoId === currentVideoId) {
+      function persistQueue() {
+        try {
+          localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+        } catch (error) {
+          console.warn("Unable to persist queue", error);
+        }
+      }
+
+      function persistCurrentVideo() {
+        try {
+          if (currentVideoId) {
+            localStorage.setItem(STORAGE_KEY, currentVideoId);
+          } else {
+            localStorage.removeItem(STORAGE_KEY);
+          }
+        } catch (error) {
+          console.warn("Unable to store current video", error);
+        }
+      }
+
+      function updateModeratorControls() {
+        if (skipButton) {
+          if (hasModeratorAccess) {
+            skipButton.removeAttribute("data-locked");
+          } else {
+            skipButton.setAttribute("data-locked", "true");
+          }
+        }
+      }
+
+      function updateNowPlayingLabel() {
+        if (!nowPlayingLabel) return;
+        if (!currentVideoId) {
+          nowPlayingLabel.textContent = "Nothing playing right now. Add something to the queue!";
           return;
         }
-        currentVideoId = videoId;
-        playerReady.then(() => {
-          loadVideo(videoId);
-          hydrateForm(videoId);
+        const metadata = metadataCache.get(currentVideoId);
+        const urlText = `https://youtu.be/${currentVideoId}`;
+        if (metadata?.title) {
+          const byline = metadata?.author ? ` — ${metadata.author}` : "";
+          nowPlayingLabel.textContent = `${metadata.title}${byline}`;
+        } else {
+          nowPlayingLabel.textContent = urlText;
+        }
+      }
+
+      function renderQueue() {
+        if (!queueList || !queueEmptyState) return;
+        queueEmptyState.hidden = queue.length > 0;
+        queueList.innerHTML = "";
+        queue.forEach((videoId, index) => {
+          const item = document.createElement("li");
+          item.className = "queue-item";
+
+          const info = document.createElement("div");
+          info.className = "queue-item-info";
+          const metadata = metadataCache.get(videoId);
+          const titleEl = document.createElement("div");
+          titleEl.className = "queue-item-title";
+          const urlText = `https://youtu.be/${videoId}`;
+          titleEl.textContent = metadata?.title || urlText;
+          const metaEl = document.createElement("div");
+          metaEl.className = "queue-item-meta";
+          metaEl.textContent = metadata?.author ? `${metadata.author} · ${urlText}` : urlText;
+          info.append(titleEl, metaEl);
+
+          const actions = document.createElement("div");
+          actions.className = "queue-actions";
+
+          const upButton = document.createElement("button");
+          upButton.type = "button";
+          upButton.textContent = "Move up";
+          upButton.dataset.action = "move-up";
+          upButton.dataset.index = String(index);
+          if (index === 0) {
+            upButton.disabled = true;
+          }
+          if (!hasModeratorAccess) {
+            upButton.dataset.locked = "true";
+          }
+
+          const downButton = document.createElement("button");
+          downButton.type = "button";
+          downButton.textContent = "Move down";
+          downButton.dataset.action = "move-down";
+          downButton.dataset.index = String(index);
+          if (index === queue.length - 1) {
+            downButton.disabled = true;
+          }
+          if (!hasModeratorAccess) {
+            downButton.dataset.locked = "true";
+          }
+
+          const removeButton = document.createElement("button");
+          removeButton.type = "button";
+          removeButton.textContent = "Remove";
+          removeButton.dataset.action = "remove";
+          removeButton.dataset.index = String(index);
+          if (!hasModeratorAccess) {
+            removeButton.dataset.locked = "true";
+          }
+
+          actions.append(upButton, downButton, removeButton);
+          item.append(info, actions);
+          queueList.append(item);
         });
+      }
+
+      async function preloadMetadata(videoId) {
+        if (!videoId || metadataCache.has(videoId)) {
+          return metadataCache.get(videoId);
+        }
         try {
-          localStorage.setItem(STORAGE_KEY, videoId);
+          const response = await fetch(
+            `https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=${videoId}`
+          );
+          if (!response.ok) {
+            throw new Error(`oEmbed lookup failed (${response.status})`);
+          }
+          const data = await response.json();
+          metadataCache.set(videoId, {
+            title: data?.title || null,
+            author: data?.author_name || null,
+          });
         } catch (error) {
-          console.warn("Unable to store video selection", error);
+          console.warn("Unable to fetch metadata", error);
+          metadataCache.set(videoId, null);
+        }
+        renderQueue();
+        updateNowPlayingLabel();
+        return metadataCache.get(videoId);
+      }
+
+      function startPlayback(videoId) {
+        if (!videoId) return;
+        currentVideoId = videoId;
+        persistCurrentVideo();
+        playerReady.then(() => {
+          player.loadVideoById(videoId);
+        });
+        preloadMetadata(videoId);
+        updateNowPlayingLabel();
+      }
+
+      async function enqueueVideo(videoId, { broadcast = false } = {}) {
+        if (!videoId) return;
+        if (broadcast) {
+          await sendCommand({ action: "enqueue", videoId });
+        }
+        queue.push(videoId);
+        persistQueue();
+        renderQueue();
+        preloadMetadata(videoId);
+        if (!currentVideoId) {
+          await advanceQueue({ broadcast: false, reason: "auto" });
+        }
+      }
+
+      async function removeFromQueue(index, { broadcast = false } = {}) {
+        if (index < 0 || index >= queue.length) return;
+        if (broadcast) {
+          await sendCommand({ action: "remove", index });
+        }
+        queue.splice(index, 1);
+        persistQueue();
+        renderQueue();
+      }
+
+      async function moveInQueue(from, to, { broadcast = false } = {}) {
+        if (from === to) return;
+        if (from < 0 || from >= queue.length) return;
+        if (to < 0 || to >= queue.length) return;
+        if (broadcast) {
+          await sendCommand({ action: "move", from, to });
+        }
+        const [entry] = queue.splice(from, 1);
+        queue.splice(to, 0, entry);
+        persistQueue();
+        renderQueue();
+      }
+
+      async function advanceQueue({ broadcast = false, reason = "auto" } = {}) {
+        if (broadcast) {
+          await sendCommand({ action: "advance", reason });
+        }
+        if (queue.length === 0) {
+          persistQueue();
+          currentVideoId = null;
+          persistCurrentVideo();
+          updateNowPlayingLabel();
+          playerReady.then(() => {
+            if (player) {
+              player.stopVideo();
+            }
+          });
+          renderQueue();
+          return;
+        }
+
+        const nextVideoId = queue.shift();
+        persistQueue();
+        renderQueue();
+        startPlayback(nextVideoId);
+      }
+
+      function isModeratorCodeValid() {
+        return controlCodeInput?.value.trim() === ADMIN_CODE;
+      }
+
+      function ensureModeratorAccess() {
+        if (hasModeratorAccess) {
+          return true;
+        }
+        if (isModeratorCodeValid()) {
+          hasModeratorAccess = true;
+          updateModeratorControls();
+          renderQueue();
+          return true;
+        }
+        setStatus("Enter the correct control code to manage the queue.");
+        return false;
+      }
+
+      async function processCommand(command) {
+        if (!command || typeof command !== "object") return;
+        if (command.clientId && command.clientId === CLIENT_ID) {
+          return;
+        }
+        switch (command.action) {
+          case "enqueue": {
+            const videoId = parseVideoId(command.videoId);
+            if (videoId) {
+              await enqueueVideo(videoId, { broadcast: false });
+              setStatus("A new song was added to the queue.", true);
+            }
+            break;
+          }
+          case "advance": {
+            await advanceQueue({ broadcast: false });
+            if (command.reason === "skip") {
+              setStatus("Song skipped by a moderator.", true);
+            } else {
+              setStatus("Moving to the next song.", true);
+            }
+            break;
+          }
+          case "remove": {
+            if (typeof command.index === "number") {
+              await removeFromQueue(command.index, { broadcast: false });
+              setStatus("A song was removed from the queue.", true);
+            }
+            break;
+          }
+          case "move": {
+            if (typeof command.from === "number" && typeof command.to === "number") {
+              await moveInQueue(command.from, command.to, { broadcast: false });
+              setStatus("Queue order updated.", true);
+            }
+            break;
+          }
+          default:
+            break;
         }
       }
 
@@ -354,15 +747,14 @@
           setStatus("Connected to the DJ broadcast channel.", true);
         });
 
-        source.addEventListener("message", (event) => {
+        source.addEventListener("message", async (event) => {
           if (!event?.data) return;
           try {
             const payload = JSON.parse(event.data);
-            const nextVideoId = parseVideoId(payload?.message || "");
-            if (nextVideoId) {
-              handleIncomingVideo(nextVideoId);
-              setStatus("DJ pushed a new video!", true);
-            }
+            const body = typeof payload?.message === "string" ? payload.message : "";
+            if (!body) return;
+            const command = JSON.parse(body);
+            await processCommand(command);
           } catch (error) {
             console.warn("Failed to parse ntfy payload", error);
           }
@@ -375,18 +767,23 @@
         return source;
       }
 
-      form.addEventListener("submit", async (event) => {
+      form?.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const code = /** @type {HTMLInputElement} */ (
-          document.getElementById("control-code")
-        ).value.trim();
-        const rawVideo = videoInput.value;
+        const code = controlCodeInput?.value.trim();
+        const rawVideo = videoInput?.value || "";
         const videoId = parseVideoId(rawVideo);
 
         if (code !== ADMIN_CODE) {
+          hasModeratorAccess = false;
+          updateModeratorControls();
+          renderQueue();
           setStatus("That control code isn't right.");
           return;
         }
+
+        hasModeratorAccess = true;
+        updateModeratorControls();
+        renderQueue();
 
         if (!videoId) {
           setStatus("Please enter a valid YouTube video link or ID.");
@@ -395,22 +792,83 @@
 
         await playerReady;
         try {
-          await publishUpdate(videoId);
-          handleIncomingVideo(videoId);
-          setStatus("Video pushed to everyone currently connected!", true);
-          form.reset();
+          await enqueueVideo(videoId, { broadcast: true });
+          setStatus("Added to the shared queue!", true);
+          if (videoInput) {
+            videoInput.value = "";
+          }
         } catch (error) {
           console.error(error);
-          setStatus(error.message || "Failed to broadcast update.");
+          setStatus(error.message || "Failed to update the queue.");
+        }
+      });
+
+      skipButton?.addEventListener("click", async () => {
+        if (!ensureModeratorAccess()) {
+          return;
+        }
+        await playerReady;
+        try {
+          await advanceQueue({ broadcast: true, reason: "skip" });
+          if (queue.length > 0) {
+            setStatus("Skipped to the next song.", true);
+          } else {
+            setStatus("Skipped the current song. Queue is now empty.", true);
+          }
+        } catch (error) {
+          console.error(error);
+          setStatus(error.message || "Failed to skip the current song.");
+        }
+      });
+
+      queueList?.addEventListener("click", async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const button = target.closest("button[data-action]");
+        if (!button) return;
+        if (button.disabled) {
+          return;
+        }
+        const index = Number(button.dataset.index);
+        if (!Number.isInteger(index)) return;
+        if (!ensureModeratorAccess()) {
+          return;
+        }
+        try {
+          switch (button.dataset.action) {
+            case "remove":
+              await removeFromQueue(index, { broadcast: true });
+              setStatus("Removed that song from the queue.", true);
+              break;
+            case "move-up":
+              if (index === 0) return;
+              await moveInQueue(index, index - 1, { broadcast: true });
+              setStatus("Moved the song up in the queue.", true);
+              break;
+            case "move-down":
+              if (index === queue.length - 1) return;
+              await moveInQueue(index, index + 1, { broadcast: true });
+              setStatus("Moved the song down in the queue.", true);
+              break;
+            default:
+              break;
+          }
+        } catch (error) {
+          console.error(error);
+          setStatus(error.message || "Failed to update the queue.");
         }
       });
 
       window.onYouTubeIframeAPIReady = function () {
-        const storedVideo = parseVideoId(localStorage.getItem(STORAGE_KEY));
-        currentVideoId = storedVideo || DEFAULT_VIDEO;
-        hydrateForm(currentVideoId);
+        const startingVideo = currentVideoId || DEFAULT_VIDEO;
+        currentVideoId = startingVideo;
+        persistCurrentVideo();
+        updateNowPlayingLabel();
+        preloadMetadata(startingVideo);
         player = new YT.Player("player", {
-          videoId: currentVideoId,
+          videoId: startingVideo,
           playerVars: {
             autoplay: 1,
             controls: 0,
@@ -428,6 +886,9 @@
             onStateChange: (event) => {
               if (event.data === YT.PlayerState.PAUSED) {
                 player.playVideo();
+              }
+              if (event.data === YT.PlayerState.ENDED) {
+                advanceQueue();
               }
               syncVolumeControl();
             },
@@ -482,6 +943,14 @@
           }
         });
       }
+
+      queue.forEach((videoId) => preloadMetadata(videoId));
+      if (currentVideoId) {
+        preloadMetadata(currentVideoId);
+      }
+      renderQueue();
+      updateModeratorControls();
+      updateNowPlayingLabel();
 
       const script = document.createElement("script");
       script.src = "https://www.youtube.com/iframe_api";

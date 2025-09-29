@@ -6,9 +6,10 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 ## Features
 
 - Embedded YouTube player powered by the [YouTube IFrame Player API](https://developers.google.com/youtube/iframe_api_reference)
-  with the native controls hidden so only the custom play/pause and mute buttons are exposed
-- Live "now playing" pushes to everyone currently connected using [ntfy](https://ntfy.sh)
-- A lightweight client-side control code gate to stop casual hijacking
+  with the native controls hidden in favour of a custom volume slider
+- Shared queue for upcoming tracks so the current song finishes before the next one begins
+- Moderator-only tools (guarded by your control code) to skip, reorder, or remove queued songs
+- Live updates for everyone currently connected using [ntfy](https://ntfy.sh)
 
 ## Getting started
 
@@ -26,9 +27,12 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 5. **Wait for the deployment.** After a minute or two, a green "Your site is live" banner should
    appear on the Pages settings screen. The site will be served at
    `https://fillylumi.github.io/PlugDjButBad`.
-6. **Share the link.** Visitors who know the control code can open the DJ booth and push a new video
-   ID. Everyone on the page at that moment jumps to the new video instantly. People who join later
-   will stick with whatever is in their local storage (or the default station) until you push again.
+6. **Share the link.** Visitors who know the control code can open the DJ booth and add videos to the
+   queue. The current song always finishes first, then the room automatically advances to the next
+   entry. Moderators can also skip the current song, reorder the queue, or remove an entry entirely.
+   Enter the correct control code once and those extra buttons stay unlocked for the rest of your
+   session. People who join later won't see previously broadcast queue updates—they'll start from the
+   default video or whatever their browser remembered from the last visit.
 
 ## Limitations
 
@@ -38,7 +42,8 @@ A very small single-room watch party site designed for GitHub Pages deployment a
   it if someone finds it.
 - The push only reaches browsers that are currently open and connected to the topic. Latecomers will
   not catch up until you send another update.
-- Viewers can only use the custom play/pause and mute buttons—scrubbing and the native YouTube
-  controls are completely disabled.
+- The queue lives in each browser's storage. Someone who reloads the page mid-set will only know
+  about songs that were added after they reconnected.
+- Viewers only get a volume slider—scrubbing and the native YouTube controls are completely disabled.
 
 Feel free to customize the styling, add chat integrations, or expand the control features as needed!
