@@ -161,7 +161,8 @@
       <section class="panel">
         <h2>DJ Control Booth</h2>
         <p style="margin-top: 0; color: #aeb4ff; font-size: 0.95rem;">
-          Set the YouTube video that everyone sees. Only people with the control code can change it.
+          Set the YouTube video that everyone sees. Only people with the control code can change it,
+          and a GitHub token is required to push the update live.
         </p>
         <form id="control-form">
           <label>
@@ -185,12 +186,22 @@
               placeholder="e.g. https://youtu.be/dQw4w9WgXcQ"
             />
           </label>
+          <label>
+            GitHub personal access token (never share this)
+            <input
+              type="password"
+              id="github-token"
+              name="githubToken"
+              autocomplete="off"
+              placeholder="Fine-grained token with Contents: Read & Write"
+            />
+          </label>
           <button type="submit">Load video</button>
           <p class="status" id="status"></p>
         </form>
         <p style="margin: 0; font-size: 0.9rem; color: #8486b2;">
-          Tip: the control code is only checked in the browser. It's great for keeping friends from
-          messing with your queue, but it isn't bulletproof security.
+          Tip: the control code is only checked in the browser. Use a unique GitHub token with limited
+          scopes and revoke it if it is ever exposed.
         </p>
       </section>
     </main>
@@ -205,10 +216,25 @@
       const ADMIN_CODE = "changeme";
       const STORAGE_KEY = "plugdjbutbad.currentVideo";
       const DEFAULT_VIDEO = "5qap5aO4i9A"; // lofi hip hop radio
+      const NOW_PLAYING_FILE = "now-playing.json";
+
+      const repoInfo = (() => {
+        const { hostname, pathname } = window.location;
+        if (hostname.endsWith(".github.io")) {
+          const owner = hostname.slice(0, -".github.io".length);
+          const [repo = "PlugDjButBad"] = pathname.replace(/^\/+/, "").split("/");
+          return { owner, repo };
+        }
+        return { owner: "fillylumi", repo: "PlugDjButBad" };
+      })();
+
+      const RAW_NOW_PLAYING_URL = `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/main/${NOW_PLAYING_FILE}`;
+      const CONTENTS_API_URL = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/contents/${NOW_PLAYING_FILE}`;
 
       const form = document.getElementById("control-form");
       const status = document.getElementById("status");
       const videoInput = document.getElementById("video-input");
+      const githubTokenInput = document.getElementById("github-token");
 
       let player;
       let playerReadyResolve;
@@ -234,6 +260,116 @@
         status.style.color = success ? "#8ef6b4" : "#ff89a7";
       }
 
+      const textEncoder = new TextEncoder();
+      const textDecoder = new TextDecoder();
+
+      function toBase64(str) {
+        const bytes = textEncoder.encode(str);
+        let binary = "";
+        bytes.forEach((byte) => {
+          binary += String.fromCharCode(byte);
+        });
+        return btoa(binary);
+      }
+
+      function fromBase64(str) {
+        try {
+          const binary = atob(str);
+          const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+          return textDecoder.decode(bytes);
+        } catch (error) {
+          console.warn("Unable to decode base64 content", error);
+          return "";
+        }
+      }
+
+      async function fetchNowPlaying() {
+        const response = await fetch(`${RAW_NOW_PLAYING_URL}?_=${Date.now()}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to load now playing file (${response.status})`);
+        }
+        const data = await response.json();
+        if (!data || typeof data.videoId !== "string") {
+          throw new Error("now-playing.json is missing a videoId");
+        }
+        return data;
+      }
+
+      async function getCurrentFileSha(token) {
+        const response = await fetch(CONTENTS_API_URL, {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error(`Unable to read now-playing.json (${response.status})`);
+        }
+        const payload = await response.json();
+        return {
+          sha: payload.sha,
+          content: fromBase64(payload.content || ""),
+        };
+      }
+
+      async function updateNowPlayingFile(videoId, token) {
+        const existing = await getCurrentFileSha(token).catch((error) => {
+          throw error;
+        });
+
+        const newContent = {
+          videoId,
+          updatedAt: new Date().toISOString(),
+        };
+
+        const response = await fetch(CONTENTS_API_URL, {
+          method: "PUT",
+          headers: {
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            message: `chore: update now playing to ${videoId}`,
+            content: toBase64(`${JSON.stringify(newContent, null, 2)}\n`),
+            sha: existing.sha,
+            branch: "main",
+          }),
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error(errorBody?.message || `GitHub update failed (${response.status})`);
+        }
+      }
+
+      let currentVideoId = null;
+
+      async function syncNowPlaying(showErrors = false) {
+        try {
+          const data = await fetchNowPlaying();
+          if (data.videoId && data.videoId !== currentVideoId) {
+            currentVideoId = data.videoId;
+            await playerReady;
+            loadVideo(currentVideoId);
+            hydrateForm(currentVideoId);
+            try {
+              localStorage.setItem(STORAGE_KEY, currentVideoId);
+            } catch (error) {
+              console.warn("Unable to store video selection", error);
+            }
+          }
+        } catch (error) {
+          if (showErrors) {
+            setStatus(error.message || "Failed to sync now-playing.json");
+          }
+          console.error(error);
+        }
+      }
+
       function hydrateForm(videoId) {
         if (!videoId) return;
         videoInput.value = `https://youtu.be/${videoId}`;
@@ -244,9 +380,15 @@
         const code = /** @type {HTMLInputElement} */ (document.getElementById("control-code")).value;
         const rawVideo = videoInput.value;
         const videoId = parseVideoId(rawVideo);
+        const token = githubTokenInput.value.trim();
 
         if (code !== ADMIN_CODE) {
           setStatus("That control code isn't right.");
+          return;
+        }
+
+        if (!token) {
+          setStatus("Enter your GitHub token to broadcast the update.");
           return;
         }
 
@@ -256,21 +398,29 @@
         }
 
         await playerReady;
-        loadVideo(videoId);
         try {
-          localStorage.setItem(STORAGE_KEY, videoId);
+          await updateNowPlayingFile(videoId, token);
+          currentVideoId = videoId;
+          loadVideo(videoId);
+          try {
+            localStorage.setItem(STORAGE_KEY, videoId);
+          } catch (error) {
+            console.warn("Unable to store video selection", error);
+          }
+          setStatus("Video updated for everyone!", true);
+          form.reset();
+          githubTokenInput.value = "";
         } catch (error) {
-          console.warn("Unable to store video selection", error);
+          setStatus(error.message || "Failed to update GitHub file");
         }
-        setStatus("Video updated for everyone!", true);
-        form.reset();
       });
 
       window.onYouTubeIframeAPIReady = function () {
-        const initialVideo = parseVideoId(localStorage.getItem(STORAGE_KEY)) || DEFAULT_VIDEO;
-        hydrateForm(initialVideo);
+        const storedVideo = parseVideoId(localStorage.getItem(STORAGE_KEY));
+        currentVideoId = storedVideo || DEFAULT_VIDEO;
+        hydrateForm(currentVideoId);
         player = new YT.Player("player", {
-          videoId: initialVideo,
+          videoId: currentVideoId,
           playerVars: {
             autoplay: 1,
             controls: 1,
@@ -281,6 +431,10 @@
           events: {
             onReady: () => {
               playerReadyResolve();
+              syncNowPlaying(true);
+              setInterval(() => {
+                syncNowPlaying(false);
+              }, 15000);
             },
           },
         });
