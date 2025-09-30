@@ -5,6 +5,7 @@ const ntfyConfig = Object.freeze({
 
 const storageKeys = Object.freeze({
   currentVideo: "plugdjbutbad.currentVideo",
+  currentVideoStartedAt: "plugdjbutbad.currentVideoStartedAt",
   queue: "plugdjbutbad.queue",
   volume: "plugdjbutbad.volume",
   displayName: "plugdjbutbad.displayName",
