@@ -289,6 +289,45 @@
         opacity: 0.65;
       }
 
+      .listeners-section {
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .listeners-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .listeners-list li {
+        padding: 0.5rem 0.75rem;
+        border-radius: 0.75rem;
+        background: rgba(12, 7, 28, 0.75);
+        border: 1px solid rgba(175, 157, 255, 0.2);
+        font-size: 0.95rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .listeners-list li strong {
+        color: #f0f3ff;
+      }
+
+      .listener-self {
+        color: #8ef6b4;
+        font-size: 0.85rem;
+      }
+
+      .listener-status {
+        color: #9aa0d8;
+        font-size: 0.8rem;
+      }
+
       footer {
         padding: 2rem 0 3rem;
         text-align: center;
@@ -378,6 +417,13 @@
           </p>
           <ol id="queue-list" class="queue-list" aria-live="polite"></ol>
         </div>
+        <div class="listeners-section">
+          <h3>Currently listening</h3>
+          <p id="listeners-empty" style="margin: 0; color: #8486b2; font-size: 0.9rem;">
+            Looks like it's just you right now.
+          </p>
+          <ul id="listeners-list" class="listeners-list" aria-live="polite"></ul>
+        </div>
         <p style="margin: 0; font-size: 0.9rem; color: #8486b2;">
           Tip: pick a long, random control topic and keep it private so strangers can't listen in on
           the broadcast channel.
@@ -404,6 +450,9 @@
       const STORAGE_KEY = "plugdjbutbad.currentVideo";
       const QUEUE_STORAGE_KEY = "plugdjbutbad.queue";
       const VOLUME_STORAGE_KEY = "plugdjbutbad.volume";
+      const NAME_STORAGE_KEY = "plugdjbutbad.displayName";
+      const HEARTBEAT_INTERVAL = 15000;
+      const PRESENCE_TTL = 45000;
       const DEFAULT_VIDEO = "5qap5aO4i9A"; // lofi hip hop radio
       const CLIENT_ID = window.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
@@ -416,6 +465,8 @@
       const queueEmptyState = document.getElementById("queue-empty");
       const nowPlayingLabel = document.getElementById("now-playing-label");
       const volumeSlider = document.getElementById("volume-slider");
+      const listenersList = document.getElementById("listeners-list");
+      const listenersEmptyState = document.getElementById("listeners-empty");
 
       let player;
       let playerReadyResolve;
@@ -423,6 +474,8 @@
       let hasModeratorAccess = false;
 
       const metadataCache = new Map();
+      const listeners = new Map();
+      const displayName = loadDisplayName();
 
       function parseVideoId(input) {
         if (!input) return null;
@@ -458,15 +511,30 @@
         status.style.color = success ? "#8ef6b4" : "#ff89a7";
       }
 
-      async function sendCommand(payload) {
+      async function sendCommand(payload, options = {}) {
+        const { useBeacon = false } = options;
         const enriched = { ...payload, clientId: CLIENT_ID, timestamp: Date.now() };
-        const response = await fetch(`${NTFY_BASE}/${encodeURIComponent(NTFY_TOPIC)}`, {
+        const body = JSON.stringify(enriched);
+        const url = `${NTFY_BASE}/${encodeURIComponent(NTFY_TOPIC)}`;
+
+        if (useBeacon && typeof navigator?.sendBeacon === "function") {
+          try {
+            const ok = navigator.sendBeacon(url, new Blob([body], { type: "text/plain" }));
+            if (ok) {
+              return;
+            }
+          } catch (error) {
+            console.warn("sendBeacon failed, falling back to fetch", error);
+          }
+        }
+
+        const response = await fetch(url, {
           method: "POST",
           headers: {
             "Content-Type": "text/plain",
             "X-Title": "Plug.DJ But Bad update",
           },
-          body: JSON.stringify(enriched),
+          body,
         });
 
         if (!response.ok) {
@@ -492,6 +560,136 @@
         } catch (error) {
           console.warn("Unable to store current video", error);
         }
+      }
+
+      function generateDisplayName() {
+        const adjectives = [
+          "Neon",
+          "Velvet",
+          "Chill",
+          "Cosmic",
+          "Lunar",
+          "Echo",
+          "Retro",
+          "Midnight",
+        ];
+        const nouns = ["Beat", "Wave", "Pulse", "Nova", "Groove", "Spark", "Rhythm", "Muse"];
+        const adjective = adjectives[Math.floor(Math.random() * adjectives.length)] ?? "Neon";
+        const noun = nouns[Math.floor(Math.random() * nouns.length)] ?? "Beat";
+        const suffix = CLIENT_ID.slice(0, 4).toUpperCase();
+        return `${adjective} ${noun} #${suffix}`;
+      }
+
+      function loadDisplayName() {
+        try {
+          const stored = localStorage.getItem(NAME_STORAGE_KEY);
+          if (stored) {
+            return stored;
+          }
+        } catch (error) {
+          console.warn("Unable to read saved display name", error);
+        }
+        const generated = generateDisplayName();
+        try {
+          localStorage.setItem(NAME_STORAGE_KEY, generated);
+        } catch (error) {
+          console.warn("Unable to persist generated display name", error);
+        }
+        return generated;
+      }
+
+      function normalizeListenerName(name, clientId) {
+        const trimmed = typeof name === "string" ? name.trim() : "";
+        if (trimmed) {
+          return trimmed;
+        }
+        const suffix = (clientId || "").slice(-4).toUpperCase();
+        return suffix ? `Listener #${suffix}` : "Listener";
+      }
+
+      function recordPresence(clientId, info = {}) {
+        if (!clientId) return;
+        const normalizedName = normalizeListenerName(info.name, clientId);
+        const timestamp = typeof info.timestamp === "number" ? info.timestamp : Date.now();
+        const isSelf = clientId === CLIENT_ID;
+        listeners.set(clientId, { name: normalizedName, lastSeen: timestamp, isSelf });
+        updateListenersUI();
+      }
+
+      function removeListener(clientId) {
+        if (!clientId) return;
+        listeners.delete(clientId);
+        updateListenersUI();
+      }
+
+      function pruneStaleListeners() {
+        const now = Date.now();
+        for (const [id, info] of listeners) {
+          if (now - info.lastSeen > PRESENCE_TTL) {
+            listeners.delete(id);
+          }
+        }
+      }
+
+      function updateListenersUI() {
+        if (!listenersList || !listenersEmptyState) {
+          return;
+        }
+        pruneStaleListeners();
+        const entries = Array.from(listeners.values());
+        listenersList.innerHTML = "";
+        if (entries.length === 0) {
+          listenersEmptyState.style.display = "block";
+          return;
+        }
+        listenersEmptyState.style.display = "none";
+        entries.sort((a, b) => {
+          if (a.isSelf && !b.isSelf) return -1;
+          if (!a.isSelf && b.isSelf) return 1;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        });
+        for (const entry of entries) {
+          const item = document.createElement("li");
+          const nameEl = document.createElement("strong");
+          nameEl.textContent = entry.name;
+          item.appendChild(nameEl);
+          if (entry.isSelf) {
+            const badge = document.createElement("span");
+            badge.className = "listener-self";
+            badge.textContent = "You";
+            item.appendChild(badge);
+          } else {
+            const statusEl = document.createElement("span");
+            statusEl.className = "listener-status";
+            statusEl.textContent = "Live";
+            item.appendChild(statusEl);
+          }
+          listenersList.appendChild(item);
+        }
+      }
+
+      async function broadcastPresence(type = "heartbeat") {
+        try {
+          await sendCommand({ action: "presence", type, name: displayName });
+        } catch (error) {
+          console.warn("Unable to broadcast presence", error);
+        }
+      }
+
+      let presenceInitialized = false;
+      let presenceIntervalId = null;
+
+      function startPresenceHeartbeat() {
+        if (presenceInitialized) {
+          return;
+        }
+        presenceInitialized = true;
+        recordPresence(CLIENT_ID, { name: displayName, timestamp: Date.now() });
+        broadcastPresence("join");
+        presenceIntervalId = window.setInterval(() => {
+          recordPresence(CLIENT_ID, { name: displayName });
+          broadcastPresence("heartbeat");
+        }, HEARTBEAT_INTERVAL);
       }
 
       function updateModeratorControls() {
@@ -734,6 +932,20 @@
             }
             break;
           }
+          case "presence": {
+            const fromClient = typeof command.clientId === "string" ? command.clientId : null;
+            if (!fromClient) {
+              break;
+            }
+            if (command.type === "leave") {
+              removeListener(fromClient);
+              break;
+            }
+            const name = typeof command.name === "string" ? command.name : "";
+            const timestamp = typeof command.timestamp === "number" ? command.timestamp : Date.now();
+            recordPresence(fromClient, { name, timestamp });
+            break;
+          }
           default:
             break;
         }
@@ -745,6 +957,8 @@
 
         source.addEventListener("open", () => {
           setStatus("Connected to the DJ broadcast channel.", true);
+          startPresenceHeartbeat();
+          broadcastPresence("heartbeat");
         });
 
         source.addEventListener("message", async (event) => {
@@ -943,6 +1157,20 @@
           }
         });
       }
+
+      startPresenceHeartbeat();
+      updateListenersUI();
+      window.setInterval(updateListenersUI, HEARTBEAT_INTERVAL);
+
+      window.addEventListener("beforeunload", () => {
+        if (presenceIntervalId !== null) {
+          clearInterval(presenceIntervalId);
+          presenceIntervalId = null;
+        }
+        sendCommand({ action: "presence", type: "leave", name: displayName }, { useBeacon: true }).catch(
+          () => {}
+        );
+      });
 
       queue.forEach((videoId) => preloadMetadata(videoId));
       if (currentVideoId) {

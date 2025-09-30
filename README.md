@@ -10,6 +10,7 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Shared queue for upcoming tracks so the current song finishes before the next one begins
 - Moderator-only tools (guarded by your control code) to skip, reorder, or remove queued songs
 - Live updates for everyone currently connected using [ntfy](https://ntfy.sh)
+- Presence list so you can see who else is currently tuned in
 
 ## Getting started
 
@@ -45,5 +46,7 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - The queue lives in each browser's storage. Someone who reloads the page mid-set will only know
   about songs that were added after they reconnected.
 - Viewers only get a volume slider—scrubbing and the native YouTube controls are completely disabled.
+- Listener presence relies on heartbeats. People disappear if their browser goes quiet for ~45
+  seconds, and brand-new arrivals show up after their first heartbeat.
 
 Feel free to customize the styling, add chat integrations, or expand the control features as needed!
