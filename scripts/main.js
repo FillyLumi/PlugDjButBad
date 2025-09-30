@@ -25,6 +25,10 @@ const {
 const SEARCH_ENDPOINTS = getSearchEndpoints();
 const CLIENT_ID = window.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
+const COMMAND_MIN_INTERVAL = 1200;
+const COMMAND_MAX_RETRIES = 2;
+const COMMAND_RETRY_BASE_DELAY = 1500;
+
 const form = document.getElementById("control-form");
 const status = document.getElementById("status");
 const videoInput = document.getElementById("video-input");
@@ -60,6 +64,8 @@ let searchRequestToken = 0;
 let hasRequestedInitialState = false;
 let hasAppliedInitialState = false;
 let stateRetryTimeoutId = null;
+let commandQueue = Promise.resolve();
+let lastCommandSentAt = 0;
 
 function parseVideoId(input) {
   if (!input) return null;
@@ -571,7 +577,13 @@ function tryRestoreModeratorSession() {
   setModeratorStatus(`Restored moderator access for ${resolved.moderator.label}.`, true);
 }
 
-async function sendCommand(payload, options = {}) {
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function performCommandSend(payload, options = {}, attempt = 0) {
   const { useBeacon = false } = options;
   const enriched = { ...payload, clientId: CLIENT_ID, timestamp: Date.now() };
   const body = JSON.stringify(enriched);
@@ -588,18 +600,79 @@ async function sendCommand(payload, options = {}) {
     }
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "text/plain",
-      "X-Title": "Plug.DJ But Bad update",
-    },
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(`ntfy update failed (${response.status})`);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain",
+        "X-Title": "Plug.DJ But Bad update",
+      },
+      body,
+    });
+  } catch (error) {
+    const networkError = new Error("Unable to reach the sync service.");
+    networkError.cause = error;
+    throw networkError;
   }
+
+  if (response.ok) {
+    return;
+  }
+
+  if (response.status === 429 && attempt < COMMAND_MAX_RETRIES) {
+    const retryAfterHeader = response.headers.get("Retry-After");
+    let retryDelay = Number.parseInt(retryAfterHeader || "", 10);
+    if (Number.isFinite(retryDelay) && retryDelay > 0) {
+      retryDelay *= 1000;
+    } else {
+      retryDelay = COMMAND_RETRY_BASE_DELAY * Math.pow(2, attempt);
+    }
+    await wait(retryDelay);
+    return performCommandSend(payload, options, attempt + 1);
+  }
+
+  const error = new Error(`ntfy update failed (${response.status})`);
+  error.status = response.status;
+  throw error;
+}
+
+async function scheduleCommandSend(payload, options = {}) {
+  const now = Date.now();
+  const waitTime = lastCommandSentAt + COMMAND_MIN_INTERVAL - now;
+  if (waitTime > 0) {
+    await wait(waitTime);
+  }
+  try {
+    await performCommandSend(payload, options);
+  } finally {
+    lastCommandSentAt = Date.now();
+  }
+}
+
+async function sendCommand(payload, options = {}) {
+  const { useBeacon = false } = options;
+  if (useBeacon) {
+    return performCommandSend(payload, options);
+  }
+
+  const queued = commandQueue.then(
+    () => scheduleCommandSend(payload, options),
+    () => scheduleCommandSend(payload, options)
+  );
+
+  commandQueue = queued.catch(() => {});
+  return queued;
+}
+
+function describeSyncError(error, fallbackMessage) {
+  if (error && typeof error === "object" && error.status === 429) {
+    return "We're sending updates too quickly. Try again in a few seconds.";
+  }
+  if (typeof error?.message === "string" && error.message.trim()) {
+    return error.message;
+  }
+  return fallbackMessage;
 }
 
 function persistQueue() {
@@ -1382,7 +1455,8 @@ searchResultsList?.addEventListener("click", async (event) => {
     }
   } catch (error) {
     console.error(error);
-    setSearchStatus(error.message || "Failed to add that video.", { isError: true });
+    const message = describeSyncError(error, "Failed to add that video.");
+    setSearchStatus(message, { isError: true });
   } finally {
     button.disabled = false;
   }
@@ -1407,7 +1481,8 @@ form?.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     console.error(error);
-    setStatus(error.message || "Failed to update the queue.");
+    const message = describeSyncError(error, "Failed to update the queue.");
+    setStatus(message);
   }
 });
 
@@ -1425,7 +1500,8 @@ skipButton?.addEventListener("click", async () => {
     }
   } catch (error) {
     console.error(error);
-    setStatus(error.message || "Failed to skip the current song.");
+    const message = describeSyncError(error, "Failed to skip the current song.");
+    setStatus(message);
   }
 });
 
@@ -1465,7 +1541,8 @@ queueList?.addEventListener("click", async (event) => {
     }
   } catch (error) {
     console.error(error);
-    setStatus(error.message || "Failed to update the queue.");
+    const message = describeSyncError(error, "Failed to update the queue.");
+    setStatus(message);
   }
 });
 
