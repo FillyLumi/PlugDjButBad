@@ -7,7 +7,6 @@ import {
   getNtfyConfig,
   getSearchEndpoints,
   getStorageKeys,
-  listModerators,
   resolveModeratorSession,
   verifyModeratorSecret,
 } from "./config.js";
@@ -43,7 +42,7 @@ const searchInput = document.getElementById("search-input");
 const searchResultsList = document.getElementById("search-results");
 const searchStatus = document.getElementById("search-status");
 const searchEmptyState = document.getElementById("search-empty");
-const moderatorSelect = document.getElementById("moderator-handle");
+const moderatorHandleInput = document.getElementById("moderator-handle");
 const moderatorKeyInput = document.getElementById("moderator-key");
 const moderatorStatus = document.getElementById("moderator-status");
 const moderatorSignInButton = document.getElementById("moderator-sign-in");
@@ -54,9 +53,11 @@ let playerReadyResolve;
 const playerReady = new Promise((resolve) => (playerReadyResolve = resolve));
 let hasModeratorAccess = false;
 let activeModeratorId = null;
+let activeModeratorLabel = null;
 
 const metadataCache = new Map();
 const listeners = new Map();
+const moderatorClaims = new Map();
 const displayName = loadDisplayName();
 let searchDebounceId = null;
 let searchAbortController = null;
@@ -452,35 +453,12 @@ function setModeratorStatus(message, success = false) {
   }
 }
 
-  function populateModeratorOptions() {
-    if (!moderatorSelect) return;
-    const currentValue = moderatorSelect.value;
-    moderatorSelect.innerHTML = "";
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Select your name";
-    placeholder.disabled = true;
-    placeholder.selected = true;
-    moderatorSelect.appendChild(placeholder);
-    const roster = listModerators();
-    for (const entry of roster) {
-      const option = document.createElement("option");
-      option.value = entry.id;
-      option.textContent = entry.label;
-      if (entry.id === currentValue) {
-        placeholder.selected = false;
-        option.selected = true;
-      }
-      moderatorSelect.appendChild(option);
-    }
-  }
-
 function updateModeratorUI() {
   const disabled = hasModeratorAccess;
-  if (moderatorSelect) {
-    moderatorSelect.disabled = disabled;
+  if (moderatorHandleInput) {
+    moderatorHandleInput.disabled = disabled;
     if (!disabled && !activeModeratorId) {
-      moderatorSelect.value = "";
+      moderatorHandleInput.value = "";
     }
   }
   if (moderatorKeyInput) {
@@ -522,8 +500,9 @@ function grantModeratorAccess(moderator, storedHash, { silent = false } = {}) {
   }
   hasModeratorAccess = true;
   activeModeratorId = moderator.id;
-  if (moderatorSelect) {
-    moderatorSelect.value = moderator.id;
+  activeModeratorLabel = moderator.label ?? moderator.id;
+  if (moderatorHandleInput) {
+    moderatorHandleInput.value = activeModeratorLabel;
   }
   updateModeratorUI();
   updateModeratorControls();
@@ -535,15 +514,20 @@ function grantModeratorAccess(moderator, storedHash, { silent = false } = {}) {
   if (storedHash) {
     saveModeratorSession(moderator.id, storedHash);
   }
+  recordPresence(CLIENT_ID, getSelfPresenceDetails({ includeTimestamp: true }));
+  broadcastPresence("heartbeat");
 }
 
 function revokeModeratorAccess({ silent = false } = {}) {
   hasModeratorAccess = false;
   activeModeratorId = null;
+  activeModeratorLabel = null;
   updateModeratorUI();
   updateModeratorControls();
   renderQueue();
   clearModeratorSession();
+  recordPresence(CLIENT_ID, getSelfPresenceDetails({ includeTimestamp: true }));
+  broadcastPresence("heartbeat");
   if (!silent) {
     setModeratorStatus("Moderator tools locked.");
     setStatus("Moderator tools locked.");
@@ -749,17 +733,68 @@ function normalizeListenerName(name, clientId) {
   return suffix ? `Listener #${suffix}` : "Listener";
 }
 
+function releaseModeratorClaim(moderatorId, clientId = null) {
+  if (!moderatorId) {
+    return;
+  }
+  const claim = moderatorClaims.get(moderatorId);
+  if (!claim) {
+    return;
+  }
+  if (clientId && claim.clientId !== clientId) {
+    return;
+  }
+  moderatorClaims.delete(moderatorId);
+}
+
+function releaseModeratorClaimsForClient(clientId) {
+  if (!clientId) {
+    return;
+  }
+  for (const [id, claim] of moderatorClaims) {
+    if (claim.clientId === clientId) {
+      moderatorClaims.delete(id);
+    }
+  }
+}
+
 function recordPresence(clientId, info = {}) {
   if (!clientId) return;
   const normalizedName = normalizeListenerName(info.name, clientId);
   const timestamp = typeof info.timestamp === "number" ? info.timestamp : Date.now();
   const isSelf = clientId === CLIENT_ID;
-  listeners.set(clientId, { name: normalizedName, lastSeen: timestamp, isSelf });
+  const rawModeratorId = typeof info.moderatorId === "string" ? info.moderatorId.trim() : "";
+  const normalizedModeratorId = rawModeratorId ? rawModeratorId.toLowerCase() : "";
+  const moderatorId = normalizedModeratorId || null;
+  const moderatorLabelRaw = typeof info.moderatorLabel === "string" ? info.moderatorLabel.trim() : "";
+  const fallbackLabel = rawModeratorId || normalizedModeratorId || null;
+  const moderatorLabel = moderatorLabelRaw || fallbackLabel;
+  const existing = listeners.get(clientId);
+  if (existing?.moderatorId && existing.moderatorId !== moderatorId) {
+    releaseModeratorClaim(existing.moderatorId, clientId);
+  }
+  if (!moderatorId) {
+    releaseModeratorClaimsForClient(clientId);
+  }
+  listeners.set(clientId, {
+    name: normalizedName,
+    lastSeen: timestamp,
+    isSelf,
+    moderatorId,
+    moderatorLabel,
+  });
+  if (moderatorId) {
+    moderatorClaims.set(moderatorId, {
+      clientId,
+      label: moderatorLabel || fallbackLabel || moderatorId,
+    });
+  }
   updateListenersUI();
 }
 
 function removeListener(clientId) {
   if (!clientId) return;
+  releaseModeratorClaimsForClient(clientId);
   listeners.delete(clientId);
   updateListenersUI();
 }
@@ -768,6 +803,7 @@ function pruneStaleListeners() {
   const now = Date.now();
   for (const [id, info] of listeners) {
     if (now - info.lastSeen > PRESENCE_TTL) {
+      releaseModeratorClaimsForClient(id);
       listeners.delete(id);
     }
   }
@@ -795,19 +831,46 @@ function updateListenersUI() {
     const nameEl = document.createElement("strong");
     nameEl.textContent = entry.name;
     item.appendChild(nameEl);
+    const tagContainer = document.createElement("div");
+    tagContainer.className = "listener-tags";
+    if (entry.moderatorId) {
+      const moderatorBadge = document.createElement("span");
+      moderatorBadge.className = "listener-moderator";
+      moderatorBadge.textContent = entry.moderatorLabel
+        ? `Moderator: ${entry.moderatorLabel}`
+        : "Moderator";
+      tagContainer.appendChild(moderatorBadge);
+    }
     if (entry.isSelf) {
       const badge = document.createElement("span");
       badge.className = "listener-self";
       badge.textContent = "You";
-      item.appendChild(badge);
+      tagContainer.appendChild(badge);
     } else {
       const statusEl = document.createElement("span");
       statusEl.className = "listener-status";
       statusEl.textContent = "Live";
-      item.appendChild(statusEl);
+      tagContainer.appendChild(statusEl);
+    }
+    if (tagContainer.childElementCount > 0) {
+      item.appendChild(tagContainer);
     }
     listenersList.appendChild(item);
   }
+}
+
+function getSelfPresenceDetails({ includeTimestamp = false } = {}) {
+  const details = { name: displayName };
+  if (includeTimestamp) {
+    details.timestamp = Date.now();
+  }
+  if (hasModeratorAccess && activeModeratorId) {
+    details.moderatorId = activeModeratorId;
+    if (activeModeratorLabel) {
+      details.moderatorLabel = activeModeratorLabel;
+    }
+  }
+  return details;
 }
 
 async function broadcastRoomState({ target = null } = {}) {
@@ -862,7 +925,8 @@ async function broadcastRoomState({ target = null } = {}) {
 
 async function broadcastPresence(type = "heartbeat") {
   try {
-    await sendCommand({ action: "presence", type, name: displayName });
+    const payload = { action: "presence", type, ...getSelfPresenceDetails() };
+    await sendCommand(payload);
   } catch (error) {
     console.warn("Unable to broadcast presence", error);
   }
@@ -902,13 +966,13 @@ function startPresenceHeartbeat() {
     return;
   }
   presenceInitialized = true;
-  recordPresence(CLIENT_ID, { name: displayName, timestamp: Date.now() });
+  recordPresence(CLIENT_ID, getSelfPresenceDetails({ includeTimestamp: true }));
   broadcastPresence("join");
   if (!hasAppliedInitialState) {
     requestRoomState();
   }
   presenceIntervalId = window.setInterval(() => {
-    recordPresence(CLIENT_ID, { name: displayName });
+    recordPresence(CLIENT_ID, getSelfPresenceDetails());
     broadcastPresence("heartbeat");
   }, HEARTBEAT_INTERVAL);
 }
@@ -1361,7 +1425,9 @@ async function processCommand(command) {
       }
       const name = typeof command.name === "string" ? command.name : "";
       const timestamp = typeof command.timestamp === "number" ? command.timestamp : Date.now();
-      recordPresence(fromClient, { name, timestamp });
+      const moderatorId = typeof command.moderatorId === "string" ? command.moderatorId : "";
+      const moderatorLabel = typeof command.moderatorLabel === "string" ? command.moderatorLabel : "";
+      recordPresence(fromClient, { name, timestamp, moderatorId, moderatorLabel });
       if (command.type === "join" && fromClient !== CLIENT_ID) {
         broadcastRoomState({ target: fromClient }).catch((error) => {
           console.warn("Unable to share room state with newcomer", error);
@@ -1551,12 +1617,27 @@ moderatorSignInButton?.addEventListener("click", async () => {
     setModeratorStatus("You're already signed in as a moderator.", true);
     return;
   }
-  const moderatorId = moderatorSelect?.value || "";
+  const typedHandle = moderatorHandleInput?.value || "";
+  const trimmedHandle = typedHandle.trim();
+  const moderatorId = trimmedHandle.toLowerCase();
   if (!moderatorId) {
-    setModeratorStatus("Choose your name before signing in.");
+    setModeratorStatus("Enter your moderator name before signing in.");
+    return;
+  }
+  const existingClaim = moderatorClaims.get(moderatorId);
+  if (existingClaim && existingClaim.clientId !== CLIENT_ID) {
+    const inUseLabel = existingClaim.label || trimmedHandle || moderatorId;
+    setModeratorStatus(`${inUseLabel} is already signed in right now.`);
     return;
   }
   const secret = moderatorKeyInput?.value || "";
+  if (!secret.trim()) {
+    setModeratorStatus("Enter your personal key.");
+    if (moderatorKeyInput) {
+      moderatorKeyInput.focus();
+    }
+    return;
+  }
   try {
     const result = await verifyModeratorSecret(moderatorId, secret);
     if (!result.ok || !result.moderator || !result.storedHash) {
@@ -1671,7 +1752,6 @@ if (volumeSlider) {
   });
 }
 
-populateModeratorOptions();
 updateModeratorUI();
 setModeratorStatus("Moderator tools locked.");
 tryRestoreModeratorSession();
@@ -1685,7 +1765,8 @@ window.addEventListener("beforeunload", () => {
     clearInterval(presenceIntervalId);
     presenceIntervalId = null;
   }
-  sendCommand({ action: "presence", type: "leave", name: displayName }, { useBeacon: true }).catch(
+  const payload = { action: "presence", type: "leave", ...getSelfPresenceDetails() };
+  sendCommand(payload, { useBeacon: true }).catch(
     () => {}
   );
 });

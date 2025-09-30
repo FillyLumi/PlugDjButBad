@@ -27,14 +27,9 @@ const searchEndpoints = [
 
 const moderatorRoster = [
   {
-    id: "host",
-    label: "Host DJ",
-    secretHash: "b5e2caab6d7cae6d37c7edb8dc270678f5d6f0e601ea09eac8687f544bc7e4ca",
-  },
-  {
-    id: "cohost",
-    label: "Co-Host",
-    secretHash: "6dc6a04104d3711637783908721c79a1d1826b974dd23797070ce839ed9a83b0",
+    id: "filly",
+    label: "filly",
+    secretHash: "toto",
   },
 ];
 

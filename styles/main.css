@@ -432,6 +432,19 @@ button.search-result-button:disabled {
   color: #f0f3ff;
 }
 
+.listener-tags {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-left: auto;
+}
+
+.listener-moderator {
+  color: #fbd79f;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .listener-self {
   color: #8ef6b4;
   font-size: 0.85rem;
