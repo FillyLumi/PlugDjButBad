@@ -14,7 +14,6 @@ import {
 const { topic: NTFY_TOPIC, baseUrl: NTFY_BASE } = getNtfyConfig();
 const {
   currentVideo: STORAGE_KEY,
-  currentVideoStartedAt: START_STORAGE_KEY,
   queue: QUEUE_STORAGE_KEY,
   volume: VOLUME_STORAGE_KEY,
   displayName: NAME_STORAGE_KEY,
@@ -62,9 +61,6 @@ const displayName = loadDisplayName();
 let searchDebounceId = null;
 let searchAbortController = null;
 let searchRequestToken = 0;
-let hasRequestedInitialState = false;
-let hasAppliedInitialState = false;
-let stateRetryTimeoutId = null;
 let commandQueue = Promise.resolve();
 let lastCommandSentAt = 0;
 
@@ -170,33 +166,6 @@ function loadStoredQueue() {
 
 let queue = loadStoredQueue();
 let currentVideoId = parseVideoId(localStorage.getItem(STORAGE_KEY)) || null;
-function loadStoredStartTimestamp() {
-  try {
-    const raw = localStorage.getItem(START_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-    return null;
-  } catch (error) {
-    console.warn("Unable to restore playback position", error);
-    return null;
-  }
-}
-
-let currentVideoStartedAt = loadStoredStartTimestamp();
-
-function computeElapsedSeconds(startedAt) {
-  if (!Number.isFinite(startedAt) || startedAt <= 0) {
-    return 0;
-  }
-  const diff = Date.now() - startedAt;
-  if (!Number.isFinite(diff) || diff <= 0) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(diff / 1000));
-}
 
 function setStatus(message, success = false) {
   if (!status) return;
@@ -667,21 +636,12 @@ function persistQueue() {
   }
 }
 
-function persistCurrentVideo({
-  videoId = currentVideoId,
-  startedAt = currentVideoStartedAt,
-} = {}) {
+function persistCurrentVideo(videoId = currentVideoId) {
   try {
     if (videoId) {
       localStorage.setItem(STORAGE_KEY, videoId);
-      if (Number.isFinite(startedAt) && startedAt > 0) {
-        localStorage.setItem(START_STORAGE_KEY, String(Math.floor(startedAt)));
-      } else {
-        localStorage.removeItem(START_STORAGE_KEY);
-      }
     } else {
       localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(START_STORAGE_KEY);
     }
   } catch (error) {
     console.warn("Unable to store current video", error);
@@ -873,56 +833,6 @@ function getSelfPresenceDetails({ includeTimestamp = false } = {}) {
   return details;
 }
 
-async function broadcastRoomState({ target = null } = {}) {
-  const payload = {
-    action: "state",
-    queue: queue.slice(),
-  };
-  if (target) {
-    payload.target = target;
-  }
-  if (currentVideoId) {
-    payload.videoId = currentVideoId;
-  }
-  if (Number.isFinite(currentVideoStartedAt) && currentVideoStartedAt > 0) {
-    payload.startedAt = Math.floor(currentVideoStartedAt);
-  }
-  const relevantIds = new Set();
-  if (currentVideoId) {
-    relevantIds.add(currentVideoId);
-  }
-  for (const id of queue) {
-    if (id) {
-      relevantIds.add(id);
-    }
-  }
-  const metadataBundle = {};
-  for (const id of relevantIds) {
-    const metadata = metadataCache.get(id);
-    if (!metadata) continue;
-    const entry = {};
-    if (metadata.title) {
-      entry.title = metadata.title;
-    }
-    if (metadata.author) {
-      entry.author = metadata.author;
-    }
-    if (Number.isFinite(metadata.duration) && metadata.duration > 0) {
-      entry.duration = Math.floor(metadata.duration);
-    }
-    if (metadata.thumbnail) {
-      entry.thumbnail = metadata.thumbnail;
-    }
-    if (Object.keys(entry).length > 0) {
-      metadataBundle[id] = entry;
-    }
-  }
-  if (Object.keys(metadataBundle).length > 0) {
-    payload.metadata = metadataBundle;
-  }
-  await sendCommand(payload);
-}
-
 async function broadcastPresence(type = "heartbeat") {
   try {
     const payload = { action: "presence", type, ...getSelfPresenceDetails() };
@@ -935,32 +845,6 @@ async function broadcastPresence(type = "heartbeat") {
 let presenceInitialized = false;
 let presenceIntervalId = null;
 
-async function requestRoomState({ allowRetry = true } = {}) {
-  if (hasRequestedInitialState) {
-    return;
-  }
-  hasRequestedInitialState = true;
-  if (stateRetryTimeoutId !== null) {
-    window.clearTimeout(stateRetryTimeoutId);
-    stateRetryTimeoutId = null;
-  }
-  try {
-    await sendCommand({ action: "state-request" });
-    if (allowRetry) {
-      stateRetryTimeoutId = window.setTimeout(() => {
-        stateRetryTimeoutId = null;
-        if (!hasAppliedInitialState) {
-          hasRequestedInitialState = false;
-          requestRoomState({ allowRetry: false });
-        }
-      }, 4000);
-    }
-  } catch (error) {
-    console.warn("Unable to request room state", error);
-    hasRequestedInitialState = false;
-  }
-}
-
 function startPresenceHeartbeat() {
   if (presenceInitialized) {
     return;
@@ -968,9 +852,6 @@ function startPresenceHeartbeat() {
   presenceInitialized = true;
   recordPresence(CLIENT_ID, getSelfPresenceDetails({ includeTimestamp: true }));
   broadcastPresence("join");
-  if (!hasAppliedInitialState) {
-    requestRoomState();
-  }
   presenceIntervalId = window.setInterval(() => {
     recordPresence(CLIENT_ID, getSelfPresenceDetails());
     broadcastPresence("heartbeat");
@@ -1119,62 +1000,21 @@ async function preloadMetadata(videoId) {
   return metadataCache.get(videoId);
 }
 
-function startPlayback(
-  videoId,
-  { startSeconds = null, startedAt = null, broadcastState = false } = {}
-) {
+function startPlayback(videoId) {
   if (!videoId) return;
   currentVideoId = videoId;
-  hasAppliedInitialState = true;
-  if (stateRetryTimeoutId !== null) {
-    window.clearTimeout(stateRetryTimeoutId);
-    stateRetryTimeoutId = null;
-  }
-
-  let effectiveStartedAt = Number.isFinite(startedAt) && startedAt > 0 ? Math.floor(startedAt) : null;
-  let effectiveStartSeconds = Number.isFinite(startSeconds) && startSeconds >= 0
-    ? Math.floor(startSeconds)
-    : null;
-
-  if (effectiveStartSeconds !== null) {
-    effectiveStartSeconds = Math.max(0, effectiveStartSeconds);
-  }
-
-  if (effectiveStartedAt === null && effectiveStartSeconds !== null) {
-    effectiveStartedAt = Date.now() - effectiveStartSeconds * 1000;
-  }
-
-  if (effectiveStartedAt === null) {
-    effectiveStartedAt = Date.now();
-  }
-
-  if (effectiveStartSeconds === null) {
-    effectiveStartSeconds = computeElapsedSeconds(effectiveStartedAt);
-  }
-
-  currentVideoStartedAt = effectiveStartedAt;
-  persistCurrentVideo({ videoId: currentVideoId, startedAt: currentVideoStartedAt });
+  persistCurrentVideo();
 
   playerReady.then(() => {
     if (!player) {
       return;
     }
-    const loadOptions = { videoId: currentVideoId };
-    if (Number.isFinite(effectiveStartSeconds) && effectiveStartSeconds > 0) {
-      loadOptions.startSeconds = effectiveStartSeconds;
-    }
-    player.loadVideoById(loadOptions);
+    player.loadVideoById({ videoId: currentVideoId });
     player.playVideo();
   });
 
   preloadMetadata(currentVideoId);
   updateNowPlayingLabel();
-
-  if (broadcastState) {
-    broadcastRoomState().catch((error) => {
-      console.warn("Unable to broadcast room state", error);
-    });
-  }
 }
 
 async function enqueueVideo(videoId, { broadcast = false, metadata = null } = {}) {
@@ -1226,15 +1066,10 @@ async function moveInQueue(from, to, { broadcast = false } = {}) {
   renderQueue();
 }
 
-async function advanceQueue({
-  broadcast = false,
-  reason = "auto",
-  startedAt: providedStartedAt = null,
-} = {}) {
+async function advanceQueue({ broadcast = false, reason = "auto" } = {}) {
   if (queue.length === 0) {
     persistQueue();
     currentVideoId = null;
-    currentVideoStartedAt = null;
     persistCurrentVideo();
     updateNowPlayingLabel();
     playerReady.then(() => {
@@ -1244,12 +1079,7 @@ async function advanceQueue({
     });
     renderQueue();
     if (broadcast) {
-      await sendCommand({ action: "advance", reason, startedAt: null });
-      try {
-        await broadcastRoomState();
-      } catch (error) {
-        console.warn("Unable to broadcast cleared queue state", error);
-      }
+      await sendCommand({ action: "advance", reason });
     }
     return;
   }
@@ -1258,18 +1088,11 @@ async function advanceQueue({
   persistQueue();
   renderQueue();
 
-  const startedAt = Number.isFinite(providedStartedAt) && providedStartedAt > 0
-    ? Math.floor(providedStartedAt)
-    : Date.now();
-
   if (broadcast) {
-    await sendCommand({ action: "advance", reason, startedAt });
+    await sendCommand({ action: "advance", reason });
   }
 
-  startPlayback(nextVideoId, {
-    startedAt,
-    broadcastState: broadcast,
-  });
+  startPlayback(nextVideoId);
 }
 
 function ensureModeratorAccess({ focusKey = false } = {}) {
@@ -1300,8 +1123,7 @@ async function processCommand(command) {
       break;
     }
     case "advance": {
-      const startedAt = Number.isFinite(command.startedAt) ? Math.floor(command.startedAt) : null;
-      await advanceQueue({ broadcast: false, reason: command.reason, startedAt });
+      await advanceQueue({ broadcast: false, reason: command.reason });
       if (command.reason === "skip") {
         setStatus("Song skipped by a moderator.", true);
       } else {
@@ -1323,97 +1145,6 @@ async function processCommand(command) {
       }
       break;
     }
-    case "state-request": {
-      const targetClient = typeof command.clientId === "string" ? command.clientId : null;
-      if (!targetClient || targetClient === CLIENT_ID) {
-        break;
-      }
-      broadcastRoomState({ target: targetClient }).catch((error) => {
-        console.warn("Unable to share room state", error);
-      });
-      break;
-    }
-    case "state": {
-      const target = typeof command.target === "string" ? command.target : null;
-      if (target && target !== CLIENT_ID) {
-        break;
-      }
-
-      const metadataMap = command.metadata;
-      if (metadataMap && typeof metadataMap === "object") {
-        for (const [id, rawInfo] of Object.entries(metadataMap)) {
-          const normalizedId = parseVideoId(id);
-          if (!normalizedId) continue;
-          const normalizedMetadata = normalizeMetadataPayload(rawInfo);
-          if (normalizedMetadata) {
-            recordMetadata(normalizedId, normalizedMetadata);
-          }
-        }
-      }
-
-      let incomingQueue = [];
-      if (Array.isArray(command.queue)) {
-        incomingQueue = command.queue
-          .map((entry) =>
-            parseVideoId(typeof entry === "string" ? entry : String(entry || ""))
-          )
-          .filter(Boolean);
-      }
-
-      queue = incomingQueue;
-      persistQueue();
-      renderQueue();
-
-      const incomingVideoId = parseVideoId(command.videoId);
-      const startedAt = Number.isFinite(command.startedAt) ? Math.floor(command.startedAt) : null;
-      const sameVideo = incomingVideoId && incomingVideoId === currentVideoId;
-      const startDiff =
-        sameVideo && Number.isFinite(startedAt) && Number.isFinite(currentVideoStartedAt)
-          ? Math.abs(currentVideoStartedAt - startedAt)
-          : null;
-      const shouldReload = !sameVideo || !Number.isFinite(startDiff) || startDiff > 2000;
-
-      if (incomingVideoId) {
-        if (shouldReload) {
-          const startSeconds = Number.isFinite(startedAt) ? computeElapsedSeconds(startedAt) : null;
-          startPlayback(incomingVideoId, {
-            startSeconds,
-            startedAt,
-            broadcastState: false,
-          });
-        } else {
-          if (Number.isFinite(startedAt)) {
-            currentVideoStartedAt = Math.floor(startedAt);
-            persistCurrentVideo();
-          }
-          preloadMetadata(incomingVideoId);
-          updateNowPlayingLabel();
-        }
-      } else {
-        currentVideoId = null;
-        currentVideoStartedAt = null;
-        persistCurrentVideo();
-        playerReady.then(() => {
-          if (player) {
-            player.stopVideo();
-          }
-        });
-        updateNowPlayingLabel();
-      }
-
-      if (stateRetryTimeoutId !== null) {
-        window.clearTimeout(stateRetryTimeoutId);
-        stateRetryTimeoutId = null;
-      }
-      const shouldAnnounce =
-        (target && target === CLIENT_ID && !hasAppliedInitialState) ||
-        (!target && !hasAppliedInitialState);
-      hasAppliedInitialState = true;
-      if (shouldAnnounce) {
-        setStatus("Synced with the room.", true);
-      }
-      break;
-    }
     case "presence": {
       const fromClient = typeof command.clientId === "string" ? command.clientId : null;
       if (!fromClient) {
@@ -1428,11 +1159,6 @@ async function processCommand(command) {
       const moderatorId = typeof command.moderatorId === "string" ? command.moderatorId : "";
       const moderatorLabel = typeof command.moderatorLabel === "string" ? command.moderatorLabel : "";
       recordPresence(fromClient, { name, timestamp, moderatorId, moderatorLabel });
-      if (command.type === "join" && fromClient !== CLIENT_ID) {
-        broadcastRoomState({ target: fromClient }).catch((error) => {
-          console.warn("Unable to share room state with newcomer", error);
-        });
-      }
       break;
     }
     default:
@@ -1448,12 +1174,6 @@ function subscribeToUpdates() {
     setStatus("Connected to the DJ broadcast channel.", true);
     startPresenceHeartbeat();
     broadcastPresence("heartbeat");
-    if (stateRetryTimeoutId !== null) {
-      window.clearTimeout(stateRetryTimeoutId);
-      stateRetryTimeoutId = null;
-    }
-    hasRequestedInitialState = false;
-    requestRoomState({ allowRetry: !hasAppliedInitialState });
   });
 
   source.addEventListener("message", async (event) => {
@@ -1670,7 +1390,6 @@ moderatorSignOutButton?.addEventListener("click", () => {
 window.onYouTubeIframeAPIReady = function () {
   const startingVideo = currentVideoId || DEFAULT_VIDEO;
   currentVideoId = startingVideo;
-  const initialStartSeconds = currentVideoId ? computeElapsedSeconds(currentVideoStartedAt) : 0;
   persistCurrentVideo();
   updateNowPlayingLabel();
   preloadMetadata(startingVideo);
@@ -1683,7 +1402,6 @@ window.onYouTubeIframeAPIReady = function () {
       rel: 0,
       iv_load_policy: 3,
       disablekb: 1,
-      start: initialStartSeconds,
     },
     events: {
       onReady: () => {

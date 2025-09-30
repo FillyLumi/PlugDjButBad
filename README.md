@@ -10,8 +10,8 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Built-in YouTube search that surfaces likely matches with thumbnails, titles, and durations so you
   can queue videos without copying IDs
 - Shared queue for upcoming tracks so the current song finishes before the next one begins
-- Late arrivals automatically receive the current track, playback position, and upcoming queue so
-  they stay in sync without manual refreshes
+- Active listeners receive queue updates in real time, while newcomers start from the default video
+  and only see songs added after they arrive
 - Moderator roster with individual keys so trusted friends can skip, reorder, or remove queued songs
 - Live updates for everyone currently connected using [ntfy](https://ntfy.sh)
 - Presence list so you can see who else is currently tuned in
@@ -50,9 +50,9 @@ A very small single-room watch party site designed for GitHub Pages deployment a
    appear on the Pages settings screen. The site will be served at
    `https://fillylumi.github.io/PlugDjButBad`.
 7. **Share the link.** Anyone with the URL can add songs to the queue. The current track finishes
-   before the next one starts so the room stays in sync. Moderators sign in with their personal keys
-   to unlock skip/reorder/remove controls. New listeners automatically receive the now playing video,
-   its elapsed time, and the queue as soon as they connect.
+   before the next one starts for everyone who was already in the room. Moderators sign in with
+   their personal keys to unlock skip/reorder/remove controls. New listeners start from the default
+   video and catch the queue updates that happen after they join.
 
 ## Project layout
 
@@ -70,11 +70,8 @@ A very small single-room watch party site designed for GitHub Pages deployment a
   determined people could brute-force short ones.
 - ntfy topics are public by default. Choose a random topic name to avoid eavesdroppers, and change
   it if someone finds it.
-- Playback sync depends on at least one other listener being connected to rebroadcast the current
-  state. If everyone leaves the room, the next visitor will start from the default video until a new
-  song is queued.
-- Synchronisation is clock-based, so a few seconds of drift can occur if someone’s device clock is
-  wildly off.
+- New arrivals always begin on the default video and only see queue changes that occur after they
+  connect. Share the room link early if you want everyone to catch the same set.
 - Viewers only get a volume slider—scrubbing and the native YouTube controls are completely disabled.
 - Listener presence relies on heartbeats. People disappear if their browser goes quiet for ~45
   seconds, and brand-new arrivals show up after their first heartbeat.
