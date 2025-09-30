@@ -143,7 +143,8 @@
       }
 
       input[type="text"],
-      input[type="password"] {
+      input[type="password"],
+      select {
         padding: 0.7rem 0.85rem;
         border-radius: 0.6rem;
         border: 1px solid rgba(189, 176, 255, 0.35);
@@ -213,6 +214,43 @@
       .queue-section {
         display: grid;
         gap: 0.75rem;
+      }
+
+      .moderator-section {
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .moderator-note {
+        margin: 0;
+        color: #8486b2;
+        font-size: 0.9rem;
+      }
+
+      .moderator-form {
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .moderator-actions {
+        display: flex;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .moderator-actions button {
+        padding: 0.55rem 1.2rem;
+      }
+
+      .moderator-status {
+        font-size: 0.85rem;
+        min-height: 1.3rem;
+        color: #ff89a7;
+      }
+
+      .moderator-status[data-success="true"] {
+        color: #8ef6b4;
       }
 
       .queue-section h3 {
@@ -354,8 +392,8 @@
     <header>
       <h1>Plug.DJ But Bad</h1>
       <p>
-        Personal watch party room with a single DJ (you!). Share the page, keep the control code
-        secret.
+        Personal watch party room with a shared queue. Anyone can add songs; only trusted
+        moderators can manage the lineup.
       </p>
     </header>
 
@@ -384,17 +422,6 @@
         </div>
         <form id="control-form">
           <label>
-            Control code
-            <input
-              type="password"
-              id="control-code"
-              name="controlCode"
-              autocomplete="current-password"
-              required
-              placeholder="Enter your secret code"
-            />
-          </label>
-          <label>
             YouTube video ID or link
             <input
               type="text"
@@ -410,6 +437,38 @@
           </div>
           <p class="status" id="status"></p>
         </form>
+        <section class="moderator-section" aria-label="Moderator sign-in">
+          <h3>Moderator access</h3>
+          <p class="moderator-note">
+            Queue moves automatically after each song. Moderators with personal keys can skip,
+            reorder, or remove tracks when needed.
+          </p>
+          <div class="moderator-form">
+            <label>
+              Moderator
+              <select id="moderator-handle" name="moderator">
+                <option value="" selected disabled>Select your name</option>
+              </select>
+            </label>
+            <label>
+              Personal key
+              <input
+                type="password"
+                id="moderator-key"
+                name="moderatorKey"
+                placeholder="Enter your key"
+                autocomplete="off"
+              />
+            </label>
+            <div class="moderator-actions">
+              <button type="button" id="moderator-sign-in">Sign in</button>
+              <button type="button" id="moderator-sign-out" class="secondary-button" disabled>
+                Sign out
+              </button>
+            </div>
+            <p class="moderator-status" id="moderator-status"></p>
+          </div>
+        </section>
         <div class="queue-section">
           <h3>Upcoming queue</h3>
           <p id="queue-empty" style="margin: 0; color: #8486b2; font-size: 0.9rem;">
@@ -425,8 +484,8 @@
           <ul id="listeners-list" class="listeners-list" aria-live="polite"></ul>
         </div>
         <p style="margin: 0; font-size: 0.9rem; color: #8486b2;">
-          Tip: pick a long, random control topic and keep it private so strangers can't listen in on
-          the broadcast channel.
+          Tip: choose long, random ntfy topic names and keep moderator keys private so strangers
+          can't hijack the room.
         </p>
       </section>
     </main>
@@ -444,13 +503,25 @@
     </footer>
 
     <script>
-      const ADMIN_CODE = "changeme";
+      const MODERATOR_ROSTER = [
+        {
+          id: "host",
+          label: "Host DJ",
+          secretHash: "b5e2caab6d7cae6d37c7edb8dc270678f5d6f0e601ea09eac8687f544bc7e4ca",
+        },
+        {
+          id: "cohost",
+          label: "Co-Host",
+          secretHash: "6dc6a04104d3711637783908721c79a1d1826b974dd23797070ce839ed9a83b0",
+        },
+      ];
       const NTFY_TOPIC = "plugdjbutbad-demo";
       const NTFY_BASE = "https://ntfy.sh";
       const STORAGE_KEY = "plugdjbutbad.currentVideo";
       const QUEUE_STORAGE_KEY = "plugdjbutbad.queue";
       const VOLUME_STORAGE_KEY = "plugdjbutbad.volume";
       const NAME_STORAGE_KEY = "plugdjbutbad.displayName";
+      const MODERATOR_STORAGE_KEY = "plugdjbutbad.moderator";
       const HEARTBEAT_INTERVAL = 15000;
       const PRESENCE_TTL = 45000;
       const DEFAULT_VIDEO = "5qap5aO4i9A"; // lofi hip hop radio
@@ -459,7 +530,6 @@
       const form = document.getElementById("control-form");
       const status = document.getElementById("status");
       const videoInput = document.getElementById("video-input");
-      const controlCodeInput = document.getElementById("control-code");
       const skipButton = document.getElementById("skip-button");
       const queueList = document.getElementById("queue-list");
       const queueEmptyState = document.getElementById("queue-empty");
@@ -467,11 +537,17 @@
       const volumeSlider = document.getElementById("volume-slider");
       const listenersList = document.getElementById("listeners-list");
       const listenersEmptyState = document.getElementById("listeners-empty");
+      const moderatorSelect = document.getElementById("moderator-handle");
+      const moderatorKeyInput = document.getElementById("moderator-key");
+      const moderatorStatus = document.getElementById("moderator-status");
+      const moderatorSignInButton = document.getElementById("moderator-sign-in");
+      const moderatorSignOutButton = document.getElementById("moderator-sign-out");
 
       let player;
       let playerReadyResolve;
       const playerReady = new Promise((resolve) => (playerReadyResolve = resolve));
       let hasModeratorAccess = false;
+      let activeModeratorId = null;
 
       const metadataCache = new Map();
       const listeners = new Map();
@@ -509,6 +585,210 @@
         if (!status) return;
         status.textContent = message;
         status.style.color = success ? "#8ef6b4" : "#ff89a7";
+      }
+
+      function setModeratorStatus(message, success = false) {
+        if (!moderatorStatus) return;
+        moderatorStatus.textContent = message;
+        if (success) {
+          moderatorStatus.dataset.success = "true";
+        } else {
+          moderatorStatus.removeAttribute("data-success");
+        }
+      }
+
+      function populateModeratorOptions() {
+        if (!moderatorSelect) return;
+        const currentValue = moderatorSelect.value;
+        moderatorSelect.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Select your name";
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        moderatorSelect.appendChild(placeholder);
+        for (const entry of MODERATOR_ROSTER) {
+          const option = document.createElement("option");
+          option.value = entry.id;
+          option.textContent = entry.label;
+          if (entry.id === currentValue) {
+            placeholder.selected = false;
+            option.selected = true;
+          }
+          moderatorSelect.appendChild(option);
+        }
+      }
+
+      function findModeratorById(id) {
+        return MODERATOR_ROSTER.find((entry) => entry.id === id) || null;
+      }
+
+      async function hashSecret(secret) {
+        if (!window.crypto?.subtle) {
+          throw new Error("Web Crypto API not available for hashing moderator keys.");
+        }
+        const encoder = new TextEncoder();
+        const data = encoder.encode(secret);
+        const digest = await window.crypto.subtle.digest("SHA-256", data);
+        return Array.from(new Uint8Array(digest))
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join("");
+      }
+
+      async function verifyModeratorSecret(moderator, secret) {
+        if (!moderator) {
+          return { ok: false, storedHash: null };
+        }
+        const trimmed = typeof secret === "string" ? secret.trim() : "";
+        if (!trimmed) {
+          return { ok: false, storedHash: null };
+        }
+        const expectedRaw = String(moderator.secretHash || "");
+        if (!expectedRaw) {
+          return { ok: false, storedHash: null };
+        }
+        const expectedNormalized = expectedRaw.toLowerCase();
+        const looksHashed = /^[a-f0-9]{64}$/.test(expectedNormalized);
+        if (window.crypto?.subtle) {
+          try {
+            const hashed = await hashSecret(trimmed);
+            if (hashed === expectedNormalized) {
+              return { ok: true, storedHash: hashed };
+            }
+          } catch (error) {
+            console.warn("Unable to hash moderator secret", error);
+          }
+        }
+        if (trimmed === expectedRaw) {
+          if (window.crypto?.subtle) {
+            try {
+              const hashed = await hashSecret(trimmed);
+              return { ok: true, storedHash: hashed };
+            } catch (error) {
+              console.warn("Unable to hash moderator secret for storage", error);
+            }
+          }
+          return {
+            ok: true,
+            storedHash: looksHashed ? expectedNormalized : expectedRaw,
+          };
+        }
+        if (!window.crypto?.subtle && trimmed.toLowerCase() === expectedNormalized) {
+          return { ok: true, storedHash: looksHashed ? expectedNormalized : expectedRaw };
+        }
+        return { ok: false, storedHash: null };
+      }
+
+      function updateModeratorUI() {
+        const disabled = hasModeratorAccess;
+        if (moderatorSelect) {
+          moderatorSelect.disabled = disabled;
+          if (!disabled && !activeModeratorId) {
+            moderatorSelect.value = "";
+          }
+        }
+        if (moderatorKeyInput) {
+          moderatorKeyInput.disabled = disabled;
+        }
+        if (moderatorSignInButton) {
+          moderatorSignInButton.disabled = disabled;
+        }
+        if (moderatorSignOutButton) {
+          moderatorSignOutButton.disabled = !disabled;
+        }
+      }
+
+      function saveModeratorSession(id, storedHash) {
+        if (!id || !storedHash) {
+          return;
+        }
+        try {
+          localStorage.setItem(
+            MODERATOR_STORAGE_KEY,
+            JSON.stringify({ id, storedHash, timestamp: Date.now() })
+          );
+        } catch (error) {
+          console.warn("Unable to persist moderator session", error);
+        }
+      }
+
+      function clearModeratorSession() {
+        try {
+          localStorage.removeItem(MODERATOR_STORAGE_KEY);
+        } catch (error) {
+          console.warn("Unable to clear moderator session", error);
+        }
+      }
+
+      function grantModeratorAccess(moderator, storedHash, { silent = false } = {}) {
+        if (!moderator) {
+          return;
+        }
+        hasModeratorAccess = true;
+        activeModeratorId = moderator.id;
+        if (moderatorSelect) {
+          moderatorSelect.value = moderator.id;
+        }
+        updateModeratorUI();
+        updateModeratorControls();
+        renderQueue();
+        if (!silent) {
+          setModeratorStatus(`Moderator tools unlocked for ${moderator.label}.`, true);
+          setStatus(`Moderator tools unlocked for ${moderator.label}.`, true);
+        }
+        if (storedHash) {
+          saveModeratorSession(moderator.id, storedHash);
+        }
+      }
+
+      function revokeModeratorAccess({ silent = false } = {}) {
+        hasModeratorAccess = false;
+        activeModeratorId = null;
+        updateModeratorUI();
+        updateModeratorControls();
+        renderQueue();
+        clearModeratorSession();
+        if (!silent) {
+          setModeratorStatus("Moderator tools locked.");
+          setStatus("Moderator tools locked.");
+        }
+      }
+
+      function tryRestoreModeratorSession() {
+        let parsed = null;
+        try {
+          const raw = localStorage.getItem(MODERATOR_STORAGE_KEY);
+          if (!raw) {
+            return;
+          }
+          parsed = JSON.parse(raw);
+        } catch (error) {
+          console.warn("Unable to read stored moderator session", error);
+        }
+        if (!parsed || typeof parsed !== "object") {
+          return;
+        }
+        const { id, storedHash } = parsed;
+        if (!id || !storedHash) {
+          return;
+        }
+        const moderator = findModeratorById(id);
+        if (!moderator) {
+          clearModeratorSession();
+          return;
+        }
+        const expectedRaw = String(moderator.secretHash || "");
+        const expectedNormalized = expectedRaw.toLowerCase();
+        const looksHashed = /^[a-f0-9]{64}$/.test(expectedNormalized);
+        const matchesHashed = storedHash === expectedNormalized;
+        const matchesRaw = !looksHashed && storedHash === expectedRaw;
+        if (!matchesHashed && !matchesRaw) {
+          clearModeratorSession();
+          return;
+        }
+        const sessionValue = matchesHashed ? expectedNormalized : expectedRaw;
+        grantModeratorAccess(moderator, sessionValue, { silent: true });
+        setModeratorStatus(`Restored moderator access for ${moderator.label}.`, true);
       }
 
       async function sendCommand(payload, options = {}) {
@@ -696,8 +976,10 @@
         if (skipButton) {
           if (hasModeratorAccess) {
             skipButton.removeAttribute("data-locked");
+            skipButton.disabled = false;
           } else {
             skipButton.setAttribute("data-locked", "true");
+            skipButton.disabled = true;
           }
         }
       }
@@ -722,6 +1004,7 @@
         if (!queueList || !queueEmptyState) return;
         queueEmptyState.hidden = queue.length > 0;
         queueList.innerHTML = "";
+        const canModerate = hasModeratorAccess;
         queue.forEach((videoId, index) => {
           const item = document.createElement("li");
           item.className = "queue-item";
@@ -746,11 +1029,11 @@
           upButton.textContent = "Move up";
           upButton.dataset.action = "move-up";
           upButton.dataset.index = String(index);
-          if (index === 0) {
-            upButton.disabled = true;
-          }
-          if (!hasModeratorAccess) {
+          upButton.disabled = !canModerate || index === 0;
+          if (!canModerate) {
             upButton.dataset.locked = "true";
+          } else {
+            upButton.removeAttribute("data-locked");
           }
 
           const downButton = document.createElement("button");
@@ -758,11 +1041,11 @@
           downButton.textContent = "Move down";
           downButton.dataset.action = "move-down";
           downButton.dataset.index = String(index);
-          if (index === queue.length - 1) {
-            downButton.disabled = true;
-          }
-          if (!hasModeratorAccess) {
+          downButton.disabled = !canModerate || index === queue.length - 1;
+          if (!canModerate) {
             downButton.dataset.locked = "true";
+          } else {
+            downButton.removeAttribute("data-locked");
           }
 
           const removeButton = document.createElement("button");
@@ -770,8 +1053,11 @@
           removeButton.textContent = "Remove";
           removeButton.dataset.action = "remove";
           removeButton.dataset.index = String(index);
-          if (!hasModeratorAccess) {
+          removeButton.disabled = !canModerate;
+          if (!canModerate) {
             removeButton.dataset.locked = "true";
+          } else {
+            removeButton.removeAttribute("data-locked");
           }
 
           actions.append(upButton, downButton, removeButton);
@@ -877,21 +1163,15 @@
         startPlayback(nextVideoId);
       }
 
-      function isModeratorCodeValid() {
-        return controlCodeInput?.value.trim() === ADMIN_CODE;
-      }
-
-      function ensureModeratorAccess() {
+      function ensureModeratorAccess({ focusKey = false } = {}) {
         if (hasModeratorAccess) {
           return true;
         }
-        if (isModeratorCodeValid()) {
-          hasModeratorAccess = true;
-          updateModeratorControls();
-          renderQueue();
-          return true;
+        setModeratorStatus("Only signed-in moderators can do that.");
+        setStatus("Only moderators can do that.");
+        if (focusKey && moderatorKeyInput && !moderatorKeyInput.disabled) {
+          moderatorKeyInput.focus();
         }
-        setStatus("Enter the correct control code to manage the queue.");
         return false;
       }
 
@@ -983,21 +1263,8 @@
 
       form?.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const code = controlCodeInput?.value.trim();
         const rawVideo = videoInput?.value || "";
         const videoId = parseVideoId(rawVideo);
-
-        if (code !== ADMIN_CODE) {
-          hasModeratorAccess = false;
-          updateModeratorControls();
-          renderQueue();
-          setStatus("That control code isn't right.");
-          return;
-        }
-
-        hasModeratorAccess = true;
-        updateModeratorControls();
-        renderQueue();
 
         if (!videoId) {
           setStatus("Please enter a valid YouTube video link or ID.");
@@ -1018,7 +1285,7 @@
       });
 
       skipButton?.addEventListener("click", async () => {
-        if (!ensureModeratorAccess()) {
+        if (!ensureModeratorAccess({ focusKey: true })) {
           return;
         }
         await playerReady;
@@ -1047,7 +1314,7 @@
         }
         const index = Number(button.dataset.index);
         if (!Number.isInteger(index)) return;
-        if (!ensureModeratorAccess()) {
+        if (!ensureModeratorAccess({ focusKey: true })) {
           return;
         }
         try {
@@ -1072,6 +1339,47 @@
         } catch (error) {
           console.error(error);
           setStatus(error.message || "Failed to update the queue.");
+        }
+      });
+
+      moderatorSignInButton?.addEventListener("click", async () => {
+        if (hasModeratorAccess) {
+          setModeratorStatus("You're already signed in as a moderator.", true);
+          return;
+        }
+        const moderatorId = moderatorSelect?.value || "";
+        const moderator = findModeratorById(moderatorId);
+        if (!moderator) {
+          setModeratorStatus("Choose your name before signing in.");
+          return;
+        }
+        const secret = moderatorKeyInput?.value || "";
+        try {
+          const result = await verifyModeratorSecret(moderator, secret);
+          if (!result.ok || !result.storedHash) {
+            setModeratorStatus("That key doesn't match this moderator.");
+            return;
+          }
+          grantModeratorAccess(moderator, result.storedHash);
+        } catch (error) {
+          console.error("Moderator sign-in failed", error);
+          setModeratorStatus("Couldn't verify that key. Try again.");
+          return;
+        } finally {
+          if (moderatorKeyInput) {
+            moderatorKeyInput.value = "";
+          }
+        }
+      });
+
+      moderatorSignOutButton?.addEventListener("click", () => {
+        if (!hasModeratorAccess) {
+          setModeratorStatus("You're not signed in as a moderator.");
+          return;
+        }
+        revokeModeratorAccess();
+        if (moderatorKeyInput) {
+          moderatorKeyInput.value = "";
         }
       });
 
@@ -1157,6 +1465,11 @@
           }
         });
       }
+
+      populateModeratorOptions();
+      updateModeratorUI();
+      setModeratorStatus("Moderator tools locked.");
+      tryRestoreModeratorSession();
 
       startPresenceHeartbeat();
       updateListenersUI();

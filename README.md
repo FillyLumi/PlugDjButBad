@@ -8,15 +8,28 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Embedded YouTube player powered by the [YouTube IFrame Player API](https://developers.google.com/youtube/iframe_api_reference)
   with the native controls hidden in favour of a custom volume slider
 - Shared queue for upcoming tracks so the current song finishes before the next one begins
-- Moderator-only tools (guarded by your control code) to skip, reorder, or remove queued songs
+- Moderator roster with individual keys so trusted friends can skip, reorder, or remove queued songs
 - Live updates for everyone currently connected using [ntfy](https://ntfy.sh)
 - Presence list so you can see who else is currently tuned in
 
 ## Getting started
 
-1. **Pick your room secret.** In `index.html`, change `ADMIN_CODE` to something only you know.
-   It's enforced in the browser, so it's not bullet-proof, but it keeps friends from editing the
-   queue without permission.
+1. **Configure your moderators.** In `index.html`, edit the `MODERATOR_ROSTER` array so it lists
+   each person allowed to manage the queue. Give every moderator a unique `id`, a friendly `label`,
+   and a SHA-256 hash of their personal key. You can generate hashes from the command line with
+   `printf 'your-secret' | sha256sum` or in the browser console with:
+
+   ```js
+   Array.from(
+     new Uint8Array(
+       await crypto.subtle.digest("SHA-256", new TextEncoder().encode("your-secret"))
+     )
+   )
+     .map((byte) => byte.toString(16).padStart(2, "0"))
+     .join("");
+   ```
+   Replace the example roster entries before you publish the site so only trusted friends can sign
+   in as moderators.
 2. **Choose a private ntfy topic.** Update `NTFY_TOPIC` in `index.html` to a long random string,
    e.g. `plugdjbutbad-8h2f3n9pv0`. ntfy topics are public, so obscurity protects your room. You
    don't need an account, API key, or token.
@@ -28,17 +41,16 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 5. **Wait for the deployment.** After a minute or two, a green "Your site is live" banner should
    appear on the Pages settings screen. The site will be served at
    `https://fillylumi.github.io/PlugDjButBad`.
-6. **Share the link.** Visitors who know the control code can open the DJ booth and add videos to the
-   queue. The current song always finishes first, then the room automatically advances to the next
-   entry. Moderators can also skip the current song, reorder the queue, or remove an entry entirely.
-   Enter the correct control code once and those extra buttons stay unlocked for the rest of your
-   session. People who join later won't see previously broadcast queue updates—they'll start from the
-   default video or whatever their browser remembered from the last visit.
+6. **Share the link.** Anyone with the URL can add songs to the queue. The current track finishes
+   before the next one starts so the room stays in sync. Moderators sign in with their personal keys
+   to unlock skip/reorder/remove controls. People who join later won't see previously broadcast queue
+   updates—they'll start from the default video or whatever their browser remembered from the last
+   visit.
 
 ## Limitations
 
-- The control code lives in the client bundle. Anyone who can read the source can find it, so use it
-  for friendly gatherings only.
+- Moderator key hashes live in the client bundle. Long, random secrets are still recommended because
+  determined people could brute-force short ones.
 - ntfy topics are public by default. Choose a random topic name to avoid eavesdroppers, and change
   it if someone finds it.
 - The push only reaches browsers that are currently open and connected to the topic. Latecomers will
