@@ -7,6 +7,8 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 
 - Embedded YouTube player powered by the [YouTube IFrame Player API](https://developers.google.com/youtube/iframe_api_reference)
   with the native controls hidden in favour of a custom volume slider
+- Built-in YouTube search that surfaces likely matches with thumbnails, titles, and durations so you
+  can queue videos without copying IDs
 - Shared queue for upcoming tracks so the current song finishes before the next one begins
 - Moderator roster with individual keys so trusted friends can skip, reorder, or remove queued songs
 - Live updates for everyone currently connected using [ntfy](https://ntfy.sh)
@@ -33,15 +35,19 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 2. **Choose a private ntfy topic.** Update `NTFY_TOPIC` in `index.html` to a long random string,
    e.g. `plugdjbutbad-8h2f3n9pv0`. ntfy topics are public, so obscurity protects your room. You
    don't need an account, API key, or token.
-3. **Commit to `main`.** Make sure your default branch is named `main` and push this repository
+3. **(Optional) Point search at another Piped instance.** The inline search box uses
+   [`piped.video`](https://piped.video) to avoid Google API keys. If that instance ever goes down,
+   swap in another [public Piped host](https://github.com/TeamPiped/Piped/wiki/Instances) by editing
+   the `SEARCH_ENDPOINTS` array near the top of `index.html`.
+4. **Commit to `main`.** Make sure your default branch is named `main` and push this repository
    there so GitHub Pages can serve the site.
-4. **Enable GitHub Pages.** In your repository on GitHub go to **Settings → Pages**, choose
+5. **Enable GitHub Pages.** In your repository on GitHub go to **Settings → Pages**, choose
    **Build and deployment → Deploy from a branch**, and select the `main` branch with `/ (root)` as
    the folder. Click **Save**; GitHub will begin building the page.
-5. **Wait for the deployment.** After a minute or two, a green "Your site is live" banner should
+6. **Wait for the deployment.** After a minute or two, a green "Your site is live" banner should
    appear on the Pages settings screen. The site will be served at
    `https://fillylumi.github.io/PlugDjButBad`.
-6. **Share the link.** Anyone with the URL can add songs to the queue. The current track finishes
+7. **Share the link.** Anyone with the URL can add songs to the queue. The current track finishes
    before the next one starts so the room stays in sync. Moderators sign in with their personal keys
    to unlock skip/reorder/remove controls. People who join later won't see previously broadcast queue
    updates—they'll start from the default video or whatever their browser remembered from the last
@@ -60,5 +66,7 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Viewers only get a volume slider—scrubbing and the native YouTube controls are completely disabled.
 - Listener presence relies on heartbeats. People disappear if their browser goes quiet for ~45
   seconds, and brand-new arrivals show up after their first heartbeat.
+- Search results come from a public Piped instance. If it rate-limits or goes down, swap in a
+  different host by updating the endpoints in `index.html`.
 
 Feel free to customize the styling, add chat integrations, or expand the control features as needed!

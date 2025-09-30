@@ -211,6 +211,89 @@
         color: #f0f3ff;
       }
 
+      .search-section {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .search-section h3 {
+        margin: 0;
+        font-size: 1.2rem;
+      }
+
+      .search-results {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .search-empty {
+        margin: 0;
+        color: #8486b2;
+        font-size: 0.9rem;
+      }
+
+      #search-results[hidden],
+      #search-empty[hidden] {
+        display: none;
+      }
+
+      button.search-result-button {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        width: 100%;
+        padding: 0.7rem;
+        border-radius: 0.85rem;
+        border: 1px solid rgba(175, 157, 255, 0.25);
+        background: rgba(22, 16, 48, 0.75);
+        color: inherit;
+        cursor: pointer;
+        text-align: left;
+        transition: border-color 0.15s ease, background 0.15s ease;
+        justify-self: stretch;
+        box-shadow: none;
+      }
+
+      button.search-result-button:hover,
+      button.search-result-button:focus-visible {
+        border-color: rgba(249, 78, 255, 0.5);
+        background: rgba(28, 18, 64, 0.9);
+        box-shadow: none;
+        transform: none;
+        outline: none;
+      }
+
+      button.search-result-button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      .search-result-thumb {
+        flex: 0 0 auto;
+        width: 96px;
+        aspect-ratio: 16 / 9;
+        border-radius: 0.6rem;
+        object-fit: cover;
+        background: #0f0d1f;
+      }
+
+      .search-result-body {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .search-result-title {
+        font-weight: 600;
+      }
+
+      .search-result-meta {
+        font-size: 0.85rem;
+        color: #a6a8d6;
+      }
+
       .queue-section {
         display: grid;
         gap: 0.75rem;
@@ -437,6 +520,22 @@
           </div>
           <p class="status" id="status"></p>
         </form>
+        <section class="search-section" aria-label="Search YouTube">
+          <h3>Find something to play</h3>
+          <label>
+            Search query
+            <input
+              type="text"
+              id="search-input"
+              name="search"
+              placeholder="Type a song, artist, or vibe"
+              autocomplete="off"
+            />
+          </label>
+          <p class="status" id="search-status"></p>
+          <p id="search-empty" class="search-empty">Start typing to discover suggestions.</p>
+          <ul id="search-results" class="search-results" aria-live="polite" hidden></ul>
+        </section>
         <section class="moderator-section" aria-label="Moderator sign-in">
           <h3>Moderator access</h3>
           <p class="moderator-note">
@@ -525,6 +624,14 @@
       const HEARTBEAT_INTERVAL = 15000;
       const PRESENCE_TTL = 45000;
       const DEFAULT_VIDEO = "5qap5aO4i9A"; // lofi hip hop radio
+      const SEARCH_DEBOUNCE_MS = 350;
+      const MAX_SEARCH_RESULTS = 6;
+      const SEARCH_ENDPOINTS = [
+        (query) =>
+          `https://piped.video/api/v1/search?filter=videos&region=US&q=${encodeURIComponent(query)}`,
+        (query) =>
+          `https://piped.video/api/v1/search?filter=videos&region=GB&q=${encodeURIComponent(query)}`,
+      ];
       const CLIENT_ID = window.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
       const form = document.getElementById("control-form");
@@ -537,6 +644,10 @@
       const volumeSlider = document.getElementById("volume-slider");
       const listenersList = document.getElementById("listeners-list");
       const listenersEmptyState = document.getElementById("listeners-empty");
+      const searchInput = document.getElementById("search-input");
+      const searchResultsList = document.getElementById("search-results");
+      const searchStatus = document.getElementById("search-status");
+      const searchEmptyState = document.getElementById("search-empty");
       const moderatorSelect = document.getElementById("moderator-handle");
       const moderatorKeyInput = document.getElementById("moderator-key");
       const moderatorStatus = document.getElementById("moderator-status");
@@ -552,6 +663,9 @@
       const metadataCache = new Map();
       const listeners = new Map();
       const displayName = loadDisplayName();
+      let searchDebounceId = null;
+      let searchAbortController = null;
+      let searchRequestToken = 0;
 
       function parseVideoId(input) {
         if (!input) return null;
@@ -561,6 +675,81 @@
         }
         const match = trimmed.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
         return match ? match[1] : null;
+      }
+
+      function parseDurationString(value) {
+        if (typeof value !== "string" || !value.trim()) {
+          return null;
+        }
+        const parts = value
+          .split(":")
+          .map((segment) => Number.parseInt(segment, 10))
+          .filter((num) => Number.isFinite(num) && num >= 0);
+        if (parts.length === 0) {
+          return null;
+        }
+        let seconds = 0;
+        for (let i = 0; i < parts.length; i += 1) {
+          const value = parts[parts.length - 1 - i];
+          seconds += value * Math.pow(60, i);
+        }
+        return seconds;
+      }
+
+      function formatDuration(seconds) {
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          return null;
+        }
+        const total = Math.floor(seconds);
+        const hrs = Math.floor(total / 3600);
+        const mins = Math.floor((total % 3600) / 60);
+        const secs = total % 60;
+        if (hrs > 0) {
+          return `${hrs}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+        }
+        return `${mins}:${String(secs).padStart(2, "0")}`;
+      }
+
+      function recordMetadata(videoId, partial = {}) {
+        if (!videoId) return;
+        const existing = metadataCache.get(videoId) || {};
+        const normalized = {
+          title: partial.title ?? existing.title ?? null,
+          author: partial.author ?? existing.author ?? null,
+          duration:
+            Number.isFinite(partial.duration) && partial.duration > 0
+              ? partial.duration
+              : Number.isFinite(existing.duration) && existing.duration > 0
+              ? existing.duration
+              : null,
+          thumbnail: partial.thumbnail ?? existing.thumbnail ?? null,
+        };
+        metadataCache.set(videoId, normalized);
+      }
+
+      function normalizeMetadataPayload(raw) {
+        if (!raw || typeof raw !== "object") {
+          return null;
+        }
+        const normalized = {};
+        if (typeof raw.title === "string" && raw.title.trim()) {
+          normalized.title = raw.title.trim();
+        }
+        if (typeof raw.author === "string" && raw.author.trim()) {
+          normalized.author = raw.author.trim();
+        }
+        const durationValue = Number.isFinite(raw.duration)
+          ? raw.duration
+          : Number.isFinite(Number.parseFloat(raw.duration))
+          ? Number.parseFloat(raw.duration)
+          : null;
+        if (Number.isFinite(durationValue) && durationValue > 0) {
+          normalized.duration = Math.round(durationValue);
+        }
+        if (typeof raw.thumbnail === "string" && raw.thumbnail.trim()) {
+          normalized.thumbnail = raw.thumbnail.trim();
+        }
+        return Object.keys(normalized).length > 0 ? normalized : null;
       }
 
       function loadStoredQueue() {
@@ -585,6 +774,245 @@
         if (!status) return;
         status.textContent = message;
         status.style.color = success ? "#8ef6b4" : "#ff89a7";
+      }
+
+      resetSearchUI();
+
+      function setSearchStatus(message, { success = false, isError = false } = {}) {
+        if (!searchStatus) return;
+        searchStatus.textContent = message || "";
+        if (!message) {
+          searchStatus.style.color = "#d5d9ff";
+          return;
+        }
+        if (success) {
+          searchStatus.style.color = "#8ef6b4";
+        } else if (isError) {
+          searchStatus.style.color = "#ff89a7";
+        } else {
+          searchStatus.style.color = "#d5d9ff";
+        }
+      }
+
+      function resetSearchUI() {
+        if (searchResultsList) {
+          searchResultsList.innerHTML = "";
+          searchResultsList.hidden = true;
+        }
+        if (searchEmptyState) {
+          searchEmptyState.textContent = "Start typing to discover suggestions.";
+          searchEmptyState.hidden = false;
+        }
+        setSearchStatus("");
+      }
+
+      function showSearchEmpty(message) {
+        if (searchEmptyState) {
+          if (message) {
+            searchEmptyState.textContent = message;
+            searchEmptyState.hidden = false;
+          } else {
+            searchEmptyState.hidden = true;
+          }
+        }
+        if (searchResultsList) {
+          searchResultsList.hidden = true;
+        }
+      }
+
+      function cancelPendingSearch() {
+        if (searchDebounceId) {
+          window.clearTimeout(searchDebounceId);
+          searchDebounceId = null;
+        }
+        if (searchAbortController) {
+          searchAbortController.abort();
+          searchAbortController = null;
+        }
+      }
+
+      function renderSearchResults(results) {
+        if (!searchResultsList) {
+          return;
+        }
+        searchResultsList.innerHTML = "";
+        if (!Array.isArray(results) || results.length === 0) {
+          showSearchEmpty("No matches found. Try another search term.");
+          return;
+        }
+        searchResultsList.hidden = false;
+        if (searchEmptyState) {
+          searchEmptyState.hidden = true;
+        }
+        for (const result of results) {
+          const item = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "search-result-button";
+          button.dataset.videoId = result.videoId;
+          if (result.title) {
+            button.dataset.title = result.title;
+          }
+          if (result.author) {
+            button.dataset.author = result.author;
+          }
+          if (Number.isFinite(result.duration)) {
+            button.dataset.duration = String(result.duration);
+          }
+          if (result.thumbnail) {
+            button.dataset.thumbnail = result.thumbnail;
+          }
+
+          const thumb = document.createElement("img");
+          thumb.className = "search-result-thumb";
+          thumb.loading = "lazy";
+          const fallbackThumb = `https://i.ytimg.com/vi/${result.videoId}/hqdefault.jpg`;
+          thumb.src = result.thumbnail || fallbackThumb;
+          thumb.alt = result.title ? `Thumbnail for ${result.title}` : "Video thumbnail";
+
+          const body = document.createElement("div");
+          body.className = "search-result-body";
+
+          const title = document.createElement("div");
+          title.className = "search-result-title";
+          title.textContent = result.title || `https://youtu.be/${result.videoId}`;
+
+          const meta = document.createElement("div");
+          meta.className = "search-result-meta";
+          const metaParts = [];
+          if (result.author) {
+            metaParts.push(result.author);
+          }
+          const durationText = result.duration ? formatDuration(result.duration) : null;
+          if (durationText) {
+            metaParts.push(durationText);
+          }
+          metaParts.push(`https://youtu.be/${result.videoId}`);
+          meta.textContent = metaParts.join(" · ");
+
+          body.append(title, meta);
+          button.append(thumb, body);
+          item.append(button);
+          searchResultsList.append(item);
+        }
+      }
+
+      async function performSearch(query) {
+        const trimmed = query.trim();
+        if (!trimmed) {
+          resetSearchUI();
+          return;
+        }
+        if (trimmed.length < 2) {
+          cancelPendingSearch();
+          setSearchStatus("");
+          showSearchEmpty("Type at least two characters to search YouTube.");
+          return;
+        }
+
+        cancelPendingSearch();
+        searchRequestToken += 1;
+        const currentToken = searchRequestToken;
+        setSearchStatus("Searching…");
+        showSearchEmpty("Looking up videos…");
+
+        for (const buildUrl of SEARCH_ENDPOINTS) {
+          const endpoint = buildUrl(trimmed);
+          try {
+            const controller = new AbortController();
+            searchAbortController = controller;
+            const response = await fetch(endpoint, {
+              signal: controller.signal,
+              headers: { Accept: "application/json" },
+            });
+            if (!response.ok) {
+              throw new Error(`Search failed (${response.status})`);
+            }
+            const payload = await response.json();
+            if (currentToken !== searchRequestToken) {
+              return;
+            }
+            const items = Array.isArray(payload)
+              ? payload
+              : Array.isArray(payload?.items)
+              ? payload.items
+              : [];
+            const normalized = [];
+            for (const entry of items) {
+              const rawUrl =
+                typeof entry?.url === "string"
+                  ? entry.url
+                  : typeof entry?.id === "string"
+                  ? entry.id
+                  : typeof entry?.videoId === "string"
+                  ? entry.videoId
+                  : "";
+              const videoId = parseVideoId(rawUrl);
+              if (!videoId) {
+                continue;
+              }
+              const type = String(entry?.type || entry?.itemType || entry?.kind || "video").toLowerCase();
+              if (type && !type.includes("video")) {
+                continue;
+              }
+              const title = typeof entry?.title === "string" ? entry.title : null;
+              const author =
+                typeof entry?.uploader === "string"
+                  ? entry.uploader
+                  : typeof entry?.uploaderName === "string"
+                  ? entry.uploaderName
+                  : typeof entry?.author === "string"
+                  ? entry.author
+                  : typeof entry?.channel === "string"
+                  ? entry.channel
+                  : null;
+              const durationSeconds = Number.isFinite(entry?.duration)
+                ? entry.duration
+                : parseDurationString(entry?.durationString || entry?.duration_text || "");
+              let thumbnail = null;
+              if (typeof entry?.thumbnail === "string") {
+                thumbnail = entry.thumbnail;
+              } else if (Array.isArray(entry?.thumbnails) && entry.thumbnails.length > 0) {
+                const firstThumb = entry.thumbnails[0];
+                if (firstThumb) {
+                  thumbnail = typeof firstThumb === "string" ? firstThumb : firstThumb.url || null;
+                }
+              }
+              normalized.push({
+                videoId,
+                title,
+                author,
+                duration: durationSeconds || null,
+                thumbnail,
+              });
+              if (normalized.length >= MAX_SEARCH_RESULTS) {
+                break;
+              }
+            }
+            if (normalized.length > 0 || buildUrl === SEARCH_ENDPOINTS[SEARCH_ENDPOINTS.length - 1]) {
+              renderSearchResults(normalized);
+              if (normalized.length > 0) {
+                setSearchStatus("", { success: false });
+              } else {
+                setSearchStatus("No videos found for that search.");
+              }
+              return;
+            }
+          } catch (error) {
+            if (error?.name === "AbortError") {
+              return;
+            }
+            console.warn("Search request failed", error);
+            // Try the next endpoint in the list.
+            continue;
+          } finally {
+            if (searchAbortController) {
+              searchAbortController = null;
+            }
+          }
+        }
+        setSearchStatus("Unable to reach the search service.", { isError: true });
+        showSearchEmpty("Search is unavailable right now. Try again in a bit.");
       }
 
       function setModeratorStatus(message, success = false) {
@@ -993,11 +1421,19 @@
         const metadata = metadataCache.get(currentVideoId);
         const urlText = `https://youtu.be/${currentVideoId}`;
         if (metadata?.title) {
-          const byline = metadata?.author ? ` — ${metadata.author}` : "";
-          nowPlayingLabel.textContent = `${metadata.title}${byline}`;
-        } else {
-          nowPlayingLabel.textContent = urlText;
+          const extras = [];
+          if (metadata.author) {
+            extras.push(metadata.author);
+          }
+          const durationText = metadata.duration ? formatDuration(metadata.duration) : null;
+          if (durationText) {
+            extras.push(durationText);
+          }
+          const suffix = extras.length > 0 ? ` — ${extras.join(" · ")}` : "";
+          nowPlayingLabel.textContent = `${metadata.title}${suffix}`;
+          return;
         }
+        nowPlayingLabel.textContent = urlText;
       }
 
       function renderQueue() {
@@ -1018,7 +1454,16 @@
           titleEl.textContent = metadata?.title || urlText;
           const metaEl = document.createElement("div");
           metaEl.className = "queue-item-meta";
-          metaEl.textContent = metadata?.author ? `${metadata.author} · ${urlText}` : urlText;
+          const metaBits = [];
+          if (metadata?.author) {
+            metaBits.push(metadata.author);
+          }
+          const durationText = metadata?.duration ? formatDuration(metadata.duration) : null;
+          if (durationText) {
+            metaBits.push(durationText);
+          }
+          metaBits.push(urlText);
+          metaEl.textContent = metaBits.join(" · ");
           info.append(titleEl, metaEl);
 
           const actions = document.createElement("div");
@@ -1067,8 +1512,12 @@
       }
 
       async function preloadMetadata(videoId) {
-        if (!videoId || metadataCache.has(videoId)) {
-          return metadataCache.get(videoId);
+        if (!videoId) {
+          return null;
+        }
+        const existing = metadataCache.get(videoId);
+        if (existing && existing.title) {
+          return existing;
         }
         try {
           const response = await fetch(
@@ -1078,13 +1527,15 @@
             throw new Error(`oEmbed lookup failed (${response.status})`);
           }
           const data = await response.json();
-          metadataCache.set(videoId, {
+          recordMetadata(videoId, {
             title: data?.title || null,
             author: data?.author_name || null,
           });
         } catch (error) {
           console.warn("Unable to fetch metadata", error);
-          metadataCache.set(videoId, null);
+          if (!metadataCache.has(videoId)) {
+            recordMetadata(videoId, {});
+          }
         }
         renderQueue();
         updateNowPlayingLabel();
@@ -1102,15 +1553,27 @@
         updateNowPlayingLabel();
       }
 
-      async function enqueueVideo(videoId, { broadcast = false } = {}) {
+      async function enqueueVideo(videoId, { broadcast = false, metadata = null } = {}) {
         if (!videoId) return;
+        const normalizedMetadata = normalizeMetadataPayload(metadata);
+        if (normalizedMetadata) {
+          recordMetadata(videoId, normalizedMetadata);
+        }
         if (broadcast) {
-          await sendCommand({ action: "enqueue", videoId });
+          const payload = { action: "enqueue", videoId };
+          if (normalizedMetadata) {
+            payload.metadata = normalizedMetadata;
+          }
+          await sendCommand(payload);
         }
         queue.push(videoId);
         persistQueue();
         renderQueue();
-        preloadMetadata(videoId);
+        if (!normalizedMetadata) {
+          preloadMetadata(videoId);
+        } else {
+          updateNowPlayingLabel();
+        }
         if (!currentVideoId) {
           await advanceQueue({ broadcast: false, reason: "auto" });
         }
@@ -1184,7 +1647,8 @@
           case "enqueue": {
             const videoId = parseVideoId(command.videoId);
             if (videoId) {
-              await enqueueVideo(videoId, { broadcast: false });
+              const metadata = normalizeMetadataPayload(command.metadata);
+              await enqueueVideo(videoId, { broadcast: false, metadata });
               setStatus("A new song was added to the queue.", true);
             }
             break;
@@ -1260,6 +1724,57 @@
 
         return source;
       }
+
+      searchInput?.addEventListener("input", () => {
+        if (!searchInput) {
+          return;
+        }
+        if (searchDebounceId) {
+          window.clearTimeout(searchDebounceId);
+          searchDebounceId = null;
+        }
+        const query = searchInput.value || "";
+        searchDebounceId = window.setTimeout(() => {
+          searchDebounceId = null;
+          performSearch(query);
+        }, SEARCH_DEBOUNCE_MS);
+      });
+
+      searchResultsList?.addEventListener("click", async (event) => {
+        const button = event.target.closest?.("button.search-result-button");
+        if (!button || button.disabled) {
+          return;
+        }
+        const videoId = parseVideoId(button.dataset.videoId);
+        if (!videoId) {
+          setSearchStatus("Couldn't figure out that video's link.", { isError: true });
+          return;
+        }
+        const durationValue = Number.parseInt(button.dataset.duration || "", 10);
+        const metadata = {
+          title: button.dataset.title || null,
+          author: button.dataset.author || null,
+          duration: Number.isFinite(durationValue) ? durationValue : null,
+          thumbnail: button.dataset.thumbnail || null,
+        };
+        button.disabled = true;
+        await playerReady;
+        try {
+          await enqueueVideo(videoId, { broadcast: true, metadata });
+          setStatus("Added to the shared queue!", true);
+          const title = button.dataset.title;
+          if (title) {
+            setSearchStatus(`Queued “${title}”.`, { success: true });
+          } else {
+            setSearchStatus("Queued that video!", { success: true });
+          }
+        } catch (error) {
+          console.error(error);
+          setSearchStatus(error.message || "Failed to add that video.", { isError: true });
+        } finally {
+          button.disabled = false;
+        }
+      });
 
       form?.addEventListener("submit", async (event) => {
         event.preventDefault();
