@@ -16,10 +16,10 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 
 ## Getting started
 
-1. **Configure your moderators.** In `index.html`, edit the `MODERATOR_ROSTER` array so it lists
-   each person allowed to manage the queue. Give every moderator a unique `id`, a friendly `label`,
-   and a SHA-256 hash of their personal key. You can generate hashes from the command line with
-   `printf 'your-secret' | sha256sum` or in the browser console with:
+1. **Configure your moderators.** In `scripts/config.js`, update the `moderatorRoster` entries so the
+   file lists each person allowed to manage the queue. Give every moderator a unique `id`, a friendly
+   `label`, and a SHA-256 hash of their personal key. You can generate hashes from the command line
+   with `printf 'your-secret' | sha256sum` or in the browser console with:
 
    ```js
    Array.from(
@@ -32,13 +32,13 @@ A very small single-room watch party site designed for GitHub Pages deployment a
    ```
    Replace the example roster entries before you publish the site so only trusted friends can sign
    in as moderators.
-2. **Choose a private ntfy topic.** Update `NTFY_TOPIC` in `index.html` to a long random string,
-   e.g. `plugdjbutbad-8h2f3n9pv0`. ntfy topics are public, so obscurity protects your room. You
-   don't need an account, API key, or token.
+2. **Choose a private ntfy topic.** Update the `ntfyConfig` object in `scripts/config.js` to use a
+   long random `topic`, e.g. `plugdjbutbad-8h2f3n9pv0`. ntfy topics are public, so obscurity
+   protects your room. You don't need an account, API key, or token.
 3. **(Optional) Point search at another Piped instance.** The inline search box uses
    [`piped.video`](https://piped.video) to avoid Google API keys. If that instance ever goes down,
    swap in another [public Piped host](https://github.com/TeamPiped/Piped/wiki/Instances) by editing
-   the `SEARCH_ENDPOINTS` array near the top of `index.html`.
+   the `searchEndpoints` array in `scripts/config.js`.
 4. **Commit to `main`.** Make sure your default branch is named `main` and push this repository
    there so GitHub Pages can serve the site.
 5. **Enable GitHub Pages.** In your repository on GitHub go to **Settings → Pages**, choose
@@ -52,6 +52,16 @@ A very small single-room watch party site designed for GitHub Pages deployment a
    to unlock skip/reorder/remove controls. People who join later won't see previously broadcast queue
    updates—they'll start from the default video or whatever their browser remembered from the last
    visit.
+
+## Project layout
+
+- `index.html` holds the page structure and loads the modular scripts and styles.
+- `styles/main.css` contains all styling for the player, queue, presence list, and admin panels.
+- `scripts/config.js` is the only place with private configuration. Values live in module scope so
+  they aren't attached to `window`—viewers can't inspect them from the console, but remember the file
+  is still delivered to every browser, so treat the hashes and ntfy topic like shared secrets.
+- `scripts/main.js` implements the YouTube player wiring, queue logic, search, presence, and
+  moderator tools using the configuration helpers exported by `config.js`.
 
 ## Limitations
 
@@ -67,6 +77,6 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Listener presence relies on heartbeats. People disappear if their browser goes quiet for ~45
   seconds, and brand-new arrivals show up after their first heartbeat.
 - Search results come from a public Piped instance. If it rate-limits or goes down, swap in a
-  different host by updating the endpoints in `index.html`.
+  different host by updating the endpoints in `scripts/config.js`.
 
 Feel free to customize the styling, add chat integrations, or expand the control features as needed!
