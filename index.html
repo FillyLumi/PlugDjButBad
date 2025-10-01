@@ -118,6 +118,30 @@
         </div>
         <div class="listeners-section">
           <h3>Currently listening</h3>
+          <section class="display-name-section" aria-label="Choose a display name">
+            <h4>Your name</h4>
+            <p class="display-name-note">
+              Pick a nickname so the listeners list shows who you are. It's saved on this browser
+              for next time.
+            </p>
+            <form id="display-name-form" class="display-name-form">
+              <label>
+                Display name
+                <input
+                  type="text"
+                  id="display-name-input"
+                  name="displayName"
+                  placeholder="e.g. Neon Beat"
+                  maxlength="40"
+                  autocomplete="off"
+                />
+              </label>
+              <div class="display-name-actions">
+                <button type="submit">Save name</button>
+              </div>
+              <p id="display-name-status" class="display-name-status" aria-live="polite"></p>
+            </form>
+          </section>
           <p id="listeners-empty" style="margin: 0; color: #8486b2; font-size: 0.9rem;">
             Looks like it's just you right now.
           </p>

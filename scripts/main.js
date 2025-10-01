@@ -41,6 +41,9 @@ const searchInput = document.getElementById("search-input");
 const searchResultsList = document.getElementById("search-results");
 const searchStatus = document.getElementById("search-status");
 const searchEmptyState = document.getElementById("search-empty");
+const displayNameForm = document.getElementById("display-name-form");
+const displayNameInput = document.getElementById("display-name-input");
+const displayNameStatus = document.getElementById("display-name-status");
 const moderatorHandleInput = document.getElementById("moderator-handle");
 const moderatorKeyInput = document.getElementById("moderator-key");
 const moderatorStatus = document.getElementById("moderator-status");
@@ -57,12 +60,14 @@ let activeModeratorLabel = null;
 const metadataCache = new Map();
 const listeners = new Map();
 const moderatorClaims = new Map();
-const displayName = loadDisplayName();
+let displayName = loadDisplayName();
 let searchDebounceId = null;
 let searchAbortController = null;
 let searchRequestToken = 0;
 let commandQueue = Promise.resolve();
 let lastCommandSentAt = 0;
+
+const MAX_DISPLAY_NAME_LENGTH = 40;
 
 function parseVideoId(input) {
   if (!input) return null;
@@ -171,6 +176,20 @@ function setStatus(message, success = false) {
   if (!status) return;
   status.textContent = message;
   status.style.color = success ? "#8ef6b4" : "#ff89a7";
+}
+
+function setDisplayNameStatus(message, success = false) {
+  if (!displayNameStatus) return;
+  displayNameStatus.textContent = message || "";
+  if (!message) {
+    displayNameStatus.removeAttribute("data-success");
+    return;
+  }
+  if (success) {
+    displayNameStatus.setAttribute("data-success", "true");
+  } else {
+    displayNameStatus.removeAttribute("data-success");
+  }
 }
 
 resetSearchUI();
@@ -648,6 +667,18 @@ function persistCurrentVideo(videoId = currentVideoId) {
   }
 }
 
+function persistDisplayName(name) {
+  try {
+    if (name) {
+      localStorage.setItem(NAME_STORAGE_KEY, name);
+    } else {
+      localStorage.removeItem(NAME_STORAGE_KEY);
+    }
+  } catch (error) {
+    console.warn("Unable to store display name", error);
+  }
+}
+
 function generateDisplayName() {
   const adjectives = [
     "Neon",
@@ -666,18 +697,37 @@ function generateDisplayName() {
   return `${adjective} ${noun} #${suffix}`;
 }
 
+function sanitizeDisplayName(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const normalizedWhitespace = value.replace(/\s+/g, " ").trim();
+  if (!normalizedWhitespace) {
+    return "";
+  }
+  const characters = Array.from(normalizedWhitespace);
+  if (characters.length > MAX_DISPLAY_NAME_LENGTH) {
+    return characters.slice(0, MAX_DISPLAY_NAME_LENGTH).join("");
+  }
+  return normalizedWhitespace;
+}
+
 function loadDisplayName() {
   try {
     const stored = localStorage.getItem(NAME_STORAGE_KEY);
-    if (stored) {
-      return stored;
+    const sanitizedStored = sanitizeDisplayName(stored);
+    if (sanitizedStored) {
+      if (stored !== sanitizedStored) {
+        persistDisplayName(sanitizedStored);
+      }
+      return sanitizedStored;
     }
   } catch (error) {
     console.warn("Unable to read saved display name", error);
   }
-  const generated = generateDisplayName();
+  const generated = sanitizeDisplayName(generateDisplayName()) || "Listener";
   try {
-    localStorage.setItem(NAME_STORAGE_KEY, generated);
+    persistDisplayName(generated);
   } catch (error) {
     console.warn("Unable to persist generated display name", error);
   }
@@ -685,9 +735,9 @@ function loadDisplayName() {
 }
 
 function normalizeListenerName(name, clientId) {
-  const trimmed = typeof name === "string" ? name.trim() : "";
-  if (trimmed) {
-    return trimmed;
+  const sanitized = sanitizeDisplayName(name);
+  if (sanitized) {
+    return sanitized;
   }
   const suffix = (clientId || "").slice(-4).toUpperCase();
   return suffix ? `Listener #${suffix}` : "Listener";
@@ -839,6 +889,33 @@ async function broadcastPresence(type = "heartbeat") {
     await sendCommand(payload);
   } catch (error) {
     console.warn("Unable to broadcast presence", error);
+  }
+}
+
+async function applyDisplayNameChange(nextName) {
+  if (!nextName) {
+    setDisplayNameStatus("Pick a name between 1 and 40 characters.");
+    return;
+  }
+  if (nextName === displayName) {
+    setDisplayNameStatus("You're already using that name.", true);
+    return;
+  }
+
+  displayName = nextName;
+  persistDisplayName(displayName);
+  const details = getSelfPresenceDetails({ includeTimestamp: true });
+  recordPresence(CLIENT_ID, details);
+
+  try {
+    await broadcastPresence("update");
+    setDisplayNameStatus("Name updated!", true);
+  } catch (error) {
+    const message = describeSyncError(
+      error,
+      "Saved locally, but notifying everyone else failed. Try again shortly."
+    );
+    setDisplayNameStatus(message);
   }
 }
 
@@ -1195,6 +1272,29 @@ function subscribeToUpdates() {
 
   return source;
 }
+
+if (displayNameInput) {
+  displayNameInput.value = displayName;
+  displayNameInput.addEventListener("input", () => {
+    setDisplayNameStatus("");
+  });
+}
+
+displayNameForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!displayNameInput) {
+    return;
+  }
+  const desiredName = sanitizeDisplayName(displayNameInput.value);
+  displayNameInput.value = desiredName;
+  if (!desiredName) {
+    setDisplayNameStatus("Pick a name between 1 and 40 characters.");
+    displayNameInput.focus();
+    return;
+  }
+  await applyDisplayNameChange(desiredName);
+  displayNameInput.value = displayName;
+});
 
 searchInput?.addEventListener("input", () => {
   if (!searchInput) {

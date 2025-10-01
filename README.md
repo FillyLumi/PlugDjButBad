@@ -15,6 +15,7 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Moderator roster with individual keys so trusted friends can skip, reorder, or remove queued songs
 - Live updates for everyone currently connected using [ntfy](https://ntfy.sh)
 - Presence list so you can see who else is currently tuned in
+- Everyone can pick a personal display name so the listeners list shows who’s who
 
 ## Getting started
 
