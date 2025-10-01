@@ -16,14 +16,18 @@
     </header>
 
     <main>
-      <section class="player-wrapper">
-        <div id="player"></div>
-        <div class="player-controls" aria-label="Volume control" role="group">
-          <label for="volume-slider">
-            Volume
-            <input type="range" id="volume-slider" min="0" max="100" value="100" />
-          </label>
+      <section class="player-area">
+        <div class="player-wrapper">
+          <div id="player"></div>
+          <div class="player-controls" aria-label="Volume control" role="group">
+            <label for="volume-slider">
+              Volume
+              <input type="range" id="volume-slider" min="0" max="100" value="100" />
+            </label>
+          </div>
         </div>
+
+        <p id="playback-timer" class="playback-timer" aria-live="polite">0:00 / --:--</p>
       </section>
 
       <section class="panel">

@@ -7,9 +7,11 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 
 - Embedded YouTube player powered by the [YouTube IFrame Player API](https://developers.google.com/youtube/iframe_api_reference)
   with the native controls hidden in favour of a custom volume slider
+- Live playback timer below the video so everyone can see the current position and total runtime
 - Built-in YouTube search that surfaces likely matches with thumbnails, titles, and durations so you
   can queue videos without copying IDs
-- Shared queue for upcoming tracks so the current song finishes before the next one begins
+- Shared queue for upcoming tracks that shows who added each song and how long it runs, so the current
+  song finishes before the next one begins
 - Active listeners receive queue updates in real time, while newcomers start from the default video
   and only see songs added after they arrive
 - Moderator roster with individual keys so trusted friends can skip, reorder, or remove queued songs
@@ -76,6 +78,8 @@ A very small single-room watch party site designed for GitHub Pages deployment a
 - Viewers only get a volume slider—scrubbing and the native YouTube controls are completely disabled.
 - Listener presence relies on heartbeats. People disappear if their browser goes quiet for ~45
   seconds, and brand-new arrivals show up after their first heartbeat.
+- Queue durations rely on metadata from search results or the active player. Manual IDs may display
+  “--:--” until YouTube shares their runtime.
 - Search results come from a public Piped instance. If it rate-limits or goes down, swap in a
   different host by updating the endpoints in `scripts/config.js`.
 

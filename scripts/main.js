@@ -35,6 +35,7 @@ const queueList = document.getElementById("queue-list");
 const queueEmptyState = document.getElementById("queue-empty");
 const nowPlayingLabel = document.getElementById("now-playing-label");
 const volumeSlider = document.getElementById("volume-slider");
+const playbackTimer = document.getElementById("playback-timer");
 const listenersList = document.getElementById("listeners-list");
 const listenersEmptyState = document.getElementById("listeners-empty");
 const searchInput = document.getElementById("search-input");
@@ -66,8 +67,10 @@ let searchAbortController = null;
 let searchRequestToken = 0;
 let commandQueue = Promise.resolve();
 let lastCommandSentAt = 0;
+let playbackTimerIntervalId = null;
 
 const MAX_DISPLAY_NAME_LENGTH = 40;
+const DEFAULT_DISPLAY_NAME = "Listener";
 
 function parseVideoId(input) {
   if (!input) return null;
@@ -160,9 +163,30 @@ function loadStoredQueue() {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((entry) => parseVideoId(typeof entry === "string" ? entry : String(entry || "")))
-      .filter(Boolean);
+    const entries = [];
+    for (const entry of parsed) {
+      let videoId = null;
+      let addedBy = null;
+      if (entry && typeof entry === "object") {
+        videoId = parseVideoId(entry.id ?? entry.videoId ?? entry.videoID ?? entry.video ?? "");
+        const rawAddedBy =
+          typeof entry.addedBy === "string"
+            ? entry.addedBy
+            : typeof entry.queuedBy === "string"
+            ? entry.queuedBy
+            : "";
+        const sanitizedAddedBy = sanitizeDisplayName(rawAddedBy);
+        if (sanitizedAddedBy) {
+          addedBy = sanitizedAddedBy;
+        }
+      } else {
+        videoId = parseVideoId(typeof entry === "string" ? entry : String(entry ?? ""));
+      }
+      if (videoId) {
+        entries.push({ id: videoId, addedBy });
+      }
+    }
+    return entries;
   } catch (error) {
     console.warn("Unable to restore queue from storage", error);
     return [];
@@ -193,6 +217,7 @@ function setDisplayNameStatus(message, success = false) {
 }
 
 resetSearchUI();
+updatePlaybackTimer();
 
 function setSearchStatus(message, { success = false, isError = false } = {}) {
   if (!searchStatus) return;
@@ -649,7 +674,23 @@ function describeSyncError(error, fallbackMessage) {
 
 function persistQueue() {
   try {
-    localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+    const serialized = queue
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const videoId = parseVideoId(entry.id ?? "");
+        if (!videoId) {
+          return null;
+        }
+        const savedName = sanitizeDisplayName(entry.addedBy);
+        return {
+          id: videoId,
+          addedBy: savedName || null,
+        };
+      })
+      .filter(Boolean);
+    localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(serialized));
   } catch (error) {
     console.warn("Unable to persist queue", error);
   }
@@ -725,7 +766,7 @@ function loadDisplayName() {
   } catch (error) {
     console.warn("Unable to read saved display name", error);
   }
-  const generated = sanitizeDisplayName(generateDisplayName()) || "Listener";
+  const generated = sanitizeDisplayName(generateDisplayName()) || DEFAULT_DISPLAY_NAME;
   try {
     persistDisplayName(generated);
   } catch (error) {
@@ -740,7 +781,7 @@ function normalizeListenerName(name, clientId) {
     return sanitized;
   }
   const suffix = (clientId || "").slice(-4).toUpperCase();
-  return suffix ? `Listener #${suffix}` : "Listener";
+  return suffix ? `Listener #${suffix}` : DEFAULT_DISPLAY_NAME;
 }
 
 function releaseModeratorClaim(moderatorId, clientId = null) {
@@ -976,7 +1017,15 @@ function renderQueue() {
   queueEmptyState.hidden = queue.length > 0;
   queueList.innerHTML = "";
   const canModerate = hasModeratorAccess;
-  queue.forEach((videoId, index) => {
+  queue.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const videoId = parseVideoId(entry.id ?? "");
+    if (!videoId) {
+      return;
+    }
+    const addedBy = sanitizeDisplayName(entry.addedBy) || DEFAULT_DISPLAY_NAME;
     const item = document.createElement("li");
     item.className = "queue-item";
 
@@ -990,12 +1039,11 @@ function renderQueue() {
     const metaEl = document.createElement("div");
     metaEl.className = "queue-item-meta";
     const metaBits = [];
+    const durationText = metadata?.duration ? formatDuration(metadata.duration) : null;
+    metaBits.push(durationText ?? "--:--");
+    metaBits.push(`Added by ${addedBy}`);
     if (metadata?.author) {
       metaBits.push(metadata.author);
-    }
-    const durationText = metadata?.duration ? formatDuration(metadata.duration) : null;
-    if (durationText) {
-      metaBits.push(durationText);
     }
     metaBits.push(urlText);
     metaEl.textContent = metaBits.join(" · ");
@@ -1046,6 +1094,52 @@ function renderQueue() {
   });
 }
 
+function updatePlaybackTimer() {
+  if (!playbackTimer) {
+    return;
+  }
+  if (!currentVideoId) {
+    playbackTimer.textContent = "0:00 / 0:00";
+    return;
+  }
+  if (!player || typeof player.getCurrentTime !== "function" || typeof player.getDuration !== "function") {
+    playbackTimer.textContent = "0:00 / --:--";
+    return;
+  }
+  let currentSeconds;
+  let durationSeconds;
+  try {
+    currentSeconds = player.getCurrentTime();
+    durationSeconds = player.getDuration();
+  } catch (error) {
+    playbackTimer.textContent = "0:00 / --:--";
+    return;
+  }
+  const formattedCurrent = formatDuration(currentSeconds) ?? "0:00";
+  const formattedDuration = formatDuration(durationSeconds) ?? "--:--";
+  playbackTimer.textContent = `${formattedCurrent} / ${formattedDuration}`;
+  if (currentVideoId && Number.isFinite(durationSeconds) && durationSeconds > 0) {
+    const existingMetadata = metadataCache.get(currentVideoId);
+    const storedDuration = existingMetadata?.duration;
+    if (!Number.isFinite(storedDuration) || storedDuration <= 0) {
+      recordMetadata(currentVideoId, { duration: Math.round(durationSeconds) });
+      renderQueue();
+      updateNowPlayingLabel();
+    }
+  }
+}
+
+function startPlaybackTimer() {
+  if (!playbackTimer) {
+    return;
+  }
+  updatePlaybackTimer();
+  if (playbackTimerIntervalId !== null) {
+    return;
+  }
+  playbackTimerIntervalId = window.setInterval(updatePlaybackTimer, 500);
+}
+
 async function preloadMetadata(videoId) {
   if (!videoId) {
     return null;
@@ -1092,22 +1186,28 @@ function startPlayback(videoId) {
 
   preloadMetadata(currentVideoId);
   updateNowPlayingLabel();
+  updatePlaybackTimer();
 }
 
-async function enqueueVideo(videoId, { broadcast = false, metadata = null } = {}) {
+async function enqueueVideo(videoId, { broadcast = false, metadata = null, addedBy = null } = {}) {
   if (!videoId) return;
   const normalizedMetadata = normalizeMetadataPayload(metadata);
   if (normalizedMetadata) {
     recordMetadata(videoId, normalizedMetadata);
   }
+  const localDisplayName = sanitizeDisplayName(displayName) || DEFAULT_DISPLAY_NAME;
+  let queueAddedBy = sanitizeDisplayName(addedBy);
+  if (!queueAddedBy) {
+    queueAddedBy = broadcast ? localDisplayName : DEFAULT_DISPLAY_NAME;
+  }
   if (broadcast) {
-    const payload = { action: "enqueue", videoId };
+    const payload = { action: "enqueue", videoId, addedBy: queueAddedBy };
     if (normalizedMetadata) {
       payload.metadata = normalizedMetadata;
     }
     await sendCommand(payload);
   }
-  queue.push(videoId);
+  queue.push({ id: videoId, addedBy: queueAddedBy });
   persistQueue();
   renderQueue();
   if (!normalizedMetadata) {
@@ -1149,6 +1249,7 @@ async function advanceQueue({ broadcast = false, reason = "auto" } = {}) {
     currentVideoId = null;
     persistCurrentVideo();
     updateNowPlayingLabel();
+    updatePlaybackTimer();
     playerReady.then(() => {
       if (player) {
         player.stopVideo();
@@ -1161,12 +1262,30 @@ async function advanceQueue({ broadcast = false, reason = "auto" } = {}) {
     return;
   }
 
-  const nextVideoId = queue.shift();
+  const nextEntry = queue.shift();
   persistQueue();
   renderQueue();
 
+  const nextVideoId = nextEntry ? parseVideoId(nextEntry.id ?? "") : null;
+
   if (broadcast) {
     await sendCommand({ action: "advance", reason });
+  }
+
+  if (!nextVideoId) {
+    currentVideoId = null;
+    persistCurrentVideo();
+    updateNowPlayingLabel();
+    updatePlaybackTimer();
+    playerReady.then(() => {
+      if (player) {
+        player.stopVideo();
+      }
+    });
+    if (queue.length > 0) {
+      await advanceQueue({ broadcast: false, reason });
+    }
+    return;
   }
 
   startPlayback(nextVideoId);
@@ -1194,7 +1313,8 @@ async function processCommand(command) {
       const videoId = parseVideoId(command.videoId);
       if (videoId) {
         const metadata = normalizeMetadataPayload(command.metadata);
-        await enqueueVideo(videoId, { broadcast: false, metadata });
+        const addedBy = typeof command.addedBy === "string" ? command.addedBy : null;
+        await enqueueVideo(videoId, { broadcast: false, metadata, addedBy });
         setStatus("A new song was added to the queue.", true);
       }
       break;
@@ -1331,7 +1451,7 @@ searchResultsList?.addEventListener("click", async (event) => {
   button.disabled = true;
   await playerReady;
   try {
-    await enqueueVideo(videoId, { broadcast: true, metadata });
+    await enqueueVideo(videoId, { broadcast: true, metadata, addedBy: displayName });
     setStatus("Added to the shared queue!", true);
     const title = button.dataset.title;
     if (title) {
@@ -1360,7 +1480,7 @@ form?.addEventListener("submit", async (event) => {
 
   await playerReady;
   try {
-    await enqueueVideo(videoId, { broadcast: true });
+    await enqueueVideo(videoId, { broadcast: true, addedBy: displayName });
     setStatus("Added to the shared queue!", true);
     if (videoInput) {
       videoInput.value = "";
@@ -1508,6 +1628,7 @@ window.onYouTubeIframeAPIReady = function () {
         playerReadyResolve();
         subscribeToUpdates();
         syncVolumeControl();
+        startPlaybackTimer();
       },
       onStateChange: (event) => {
         if (event.data === YT.PlayerState.PAUSED) {
@@ -1517,6 +1638,7 @@ window.onYouTubeIframeAPIReady = function () {
           advanceQueue();
         }
         syncVolumeControl();
+        updatePlaybackTimer();
       },
     },
   });
