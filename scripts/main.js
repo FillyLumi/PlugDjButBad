@@ -58,6 +58,9 @@ let hasModeratorAccess = false;
 let activeModeratorId = null;
 let activeModeratorLabel = null;
 
+const MAX_DISPLAY_NAME_LENGTH = 40;
+const DEFAULT_DISPLAY_NAME = "Listener";
+
 const metadataCache = new Map();
 const listeners = new Map();
 const moderatorClaims = new Map();
@@ -68,9 +71,6 @@ let searchRequestToken = 0;
 let commandQueue = Promise.resolve();
 let lastCommandSentAt = 0;
 let playbackTimerIntervalId = null;
-
-const MAX_DISPLAY_NAME_LENGTH = 40;
-const DEFAULT_DISPLAY_NAME = "Listener";
 
 function parseVideoId(input) {
   if (!input) return null;
