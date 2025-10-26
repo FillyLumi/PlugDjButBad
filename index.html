@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plug.DJ But Bad</title>
+    <link rel="stylesheet" href="styles/main.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Plug.DJ But Bad</h1>
+      <p>
+        Personal watch party room with a shared queue. Anyone can add songs; only trusted
+        moderators can manage the lineup.
+      </p>
+    </header>
+
+    <main>
+      <section class="player-area">
+        <div class="player-wrapper">
+          <div id="player"></div>
+          <div class="player-controls" aria-label="Volume control" role="group">
+            <label for="volume-slider">
+              Volume
+              <input type="range" id="volume-slider" min="0" max="100" value="100" />
+            </label>
+          </div>
+        </div>
+
+        <p id="playback-timer" class="playback-timer" aria-live="polite">0:00 / --:--</p>
+      </section>
+
+      <section class="panel">
+        <h2>DJ Control Booth</h2>
+        <p style="margin-top: 0; color: #aeb4ff; font-size: 0.95rem;">
+          Updates are broadcast live to people already on the page using
+          <a href="https://ntfy.sh" target="_blank" rel="noreferrer noopener">ntfy</a>.
+          Late arrivals won't catch up automatically, but anyone connected when you send an update
+          will jump to the new video immediately.
+        </p>
+        <div class="now-playing">
+          <strong>Now playing:</strong>
+          <span id="now-playing-label">Loading…</span>
+        </div>
+        <form id="control-form">
+          <label>
+            YouTube video ID or link
+            <input
+              type="text"
+              id="video-input"
+              name="video"
+              required
+              placeholder="e.g. https://youtu.be/dQw4w9WgXcQ"
+            />
+          </label>
+          <div class="form-actions">
+            <button type="submit">Add to queue</button>
+            <button type="button" id="skip-button" class="secondary-button">Skip current song</button>
+          </div>
+          <p class="status" id="status"></p>
+        </form>
+        <section class="search-section" aria-label="Search YouTube">
+          <h3>Find something to play</h3>
+          <label>
+            Search query
+            <input
+              type="text"
+              id="search-input"
+              name="search"
+              placeholder="Type a song, artist, or vibe"
+              autocomplete="off"
+            />
+          </label>
+          <p class="status" id="search-status"></p>
+          <p id="search-empty" class="search-empty">Start typing to discover suggestions.</p>
+          <ul id="search-results" class="search-results" aria-live="polite" hidden></ul>
+        </section>
+        <section class="moderator-section" aria-label="Moderator sign-in">
+          <h3>Moderator access</h3>
+          <p class="moderator-note">
+            Queue moves automatically after each song. Moderators with personal keys can skip,
+            reorder, or remove tracks when needed.
+          </p>
+          <div class="moderator-form">
+            <label>
+              Moderator name
+              <input
+                type="text"
+                id="moderator-handle"
+                name="moderator"
+                placeholder="Type your moderator name"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+              />
+            </label>
+            <label>
+              Personal key
+              <input
+                type="password"
+                id="moderator-key"
+                name="moderatorKey"
+                placeholder="Enter your key"
+                autocomplete="off"
+              />
+            </label>
+            <div class="moderator-actions">
+              <button type="button" id="moderator-sign-in">Sign in</button>
+              <button type="button" id="moderator-sign-out" class="secondary-button" disabled>
+                Sign out
+              </button>
+            </div>
+            <p class="moderator-status" id="moderator-status"></p>
+          </div>
+        </section>
+        <div class="queue-section">
+          <h3>Upcoming queue</h3>
+          <p id="queue-empty" style="margin: 0; color: #8486b2; font-size: 0.9rem;">
+            Queue is empty. Add something above!
+          </p>
+          <ol id="queue-list" class="queue-list" aria-live="polite"></ol>
+        </div>
+        <div class="listeners-section">
+          <h3>Currently listening</h3>
+          <section class="display-name-section" aria-label="Choose a display name">
+            <h4>Your name</h4>
+            <p class="display-name-note">
+              Pick a nickname so the listeners list shows who you are. It's saved on this browser
+              for next time.
+            </p>
+            <form id="display-name-form" class="display-name-form">
+              <label>
+                Display name
+                <input
+                  type="text"
+                  id="display-name-input"
+                  name="displayName"
+                  placeholder="e.g. Neon Beat"
+                  maxlength="40"
+                  autocomplete="off"
+                />
+              </label>
+              <div class="display-name-actions">
+                <button type="submit">Save name</button>
+              </div>
+              <p id="display-name-status" class="display-name-status" aria-live="polite"></p>
+            </form>
+          </section>
+          <p id="listeners-empty" style="margin: 0; color: #8486b2; font-size: 0.9rem;">
+            Looks like it's just you right now.
+          </p>
+          <ul id="listeners-list" class="listeners-list" aria-live="polite"></ul>
+        </div>
+        <p style="margin: 0; font-size: 0.9rem; color: #8486b2;">
+          Tip: choose long, random ntfy topic names and keep moderator keys private so strangers
+          can't hijack the room.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Built with the
+        <a href="https://developers.google.com/youtube/iframe_api_reference" target="_blank" rel="noreferrer noopener">
+          YouTube IFrame Player API
+        </a>
+        and
+        <a href="https://ntfy.sh/docs" target="_blank" rel="noreferrer noopener">ntfy</a>
+        for lightweight push updates.
+      </p>
+    </footer>
+
+    <script type="module" src="scripts/main.js"></script>
+  </body>
+</html>
